@@ -83,7 +83,7 @@ normally has in `PATH`.
 Edit the variables at the top of the script:
 
 ```sh
-MAILTO="adm-myhost@example.com"
+MAILTO="root"
 
 CHECK_DISK=yes
 DISK_WARN_PCT=80
@@ -105,6 +105,20 @@ Then add it to `/etc/crontab` to run daily:
 The OpenBSD script requires root (`rcctl`, `syspatch`) and mails an
 error report and exits if run without it. Run it via `doas`/`sudo`
 when testing manually, or via cron as root for regular operation.
+
+### Service semantics
+
+`EXPECTED_SERVICES` must be the complete list of services expected
+to be running, not just the ones you specifically want to watch -
+any running service not listed there triggers a WARN. Before first
+use, determine your actual baseline:
+
+```sh
+rcctl ls started          # OpenBSD
+systemctl list-units --type=service --state=running --no-legend   # Debian
+```
+
+Then build `EXPECTED_SERVICES` from that output.
 
 ### Status levels
 

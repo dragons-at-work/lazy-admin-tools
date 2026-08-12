@@ -3,13 +3,19 @@
 # Runs daily via cron, sends report via mail.
 
 # --- Configuration ---
-MAILTO="adm-beispielserver@example.com"
+MAILTO="root"
 
 CHECK_DISK=yes
 DISK_WARN_PCT=80
 DISK_ERROR_PCT=95
 
 CHECK_SERVICES=yes
+# Complete list of services expected to be running - any running
+# service not listed here triggers a WARN, so this must be your full
+# baseline, not just the services you care about. Before first use,
+# determine your actual baseline with:
+#   rcctl ls started
+# Example only - replace with your real service list.
 EXPECTED_SERVICES="httpd relayd smtpd sshd"
 
 CHECK_PORTS=yes
