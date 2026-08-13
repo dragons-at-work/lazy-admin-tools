@@ -26,6 +26,12 @@ CHECK_UPDATES=yes
 
 # --- End configuration ---
 
+# cron uses a minimal PATH (e.g. /usr/bin:/bin) that does not include
+# /usr/sbin, where tools like ufw live - set an explicit PATH so the
+# script behaves the same under cron as it does interactively.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 HOSTNAME=$(hostname)
 DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
