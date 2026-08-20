@@ -43,7 +43,7 @@ BASE=/etc/mailserver
 STABLE="$BASE/generated"
 GENERATIONS="$BASE/generations"
 BACKUPS="$BASE/backups"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # --- End configuration ---
 
 if [[ "$(id -u)" -ne 0 ]]; then
