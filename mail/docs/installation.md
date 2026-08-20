@@ -1,0 +1,219 @@
+# Mailserver installation
+
+## Scope
+
+These instructions describe the currently tested environment:
+
+-   Debian 13
+-   Dovecot 2.4.x
+-   OpenSMTPD 7.6 portable
+
+OpenBSD and other platforms have not yet been tested.
+
+The tools do not install or fully configure OpenSMTPD or Dovecot. They
+manage the hosted-mail portion after the underlying services and
+required system users exist.
+
+## Prerequisites
+
+The reference setup expects:
+
+-   OpenSMTPD installed and operational;
+-   Dovecot installed and operational;
+-   LMTP enabled in Dovecot;
+-   a `vmail` system user/group suitable for virtual mail ownership;
+-   a working host-level outbound mail path;
+-   root access for administration;
+-   the mailserver scripts installed together so `mailserver-deploy.sh`
+    can invoke the validator/generator scripts from the same directory.
+
+Before introducing hosted domains, verify the existing services
+independently.
+
+## Dovecot model
+
+The tested Dovecot storage model is Maildir with a virtual-mail base:
+
+``` text
+mail_driver = maildir
+mail_home = /var/vmail/%{user | domain}/%{user | username}
+mail_path = %{home}
+mail_uid = vmail
+mail_gid = vmail
+```
+
+Authentication uses a passwd-file with SHA512-Crypt credentials and a
+static user database.
+
+The exact surrounding Dovecot configuration remains host configuration.
+The mailserver tools deploy the generated users file to the configured
+`dovecot_users_path`.
+
+## Initialize the store
+
+Run:
+
+``` bash
+sudo ./mailserver-init.sh
+```
+
+The command is idempotent: existing files are preserved rather than
+overwritten.
+
+Inspect the resulting configuration:
+
+``` bash
+sudo find /etc/mailserver -maxdepth 2 -printf '%M %u:%g %p\n'
+sudo cat /etc/mailserver/config
+```
+
+Adjust host-level paths in `/etc/mailserver/config` if necessary before
+deployment.
+
+## OpenSMTPD integration
+
+The mailserver tools deliberately do not replace `/etc/smtpd.conf`.
+
+The host configuration remains responsible for listeners, system
+aliases, local host mail, and outbound relay configuration.
+
+Add the generated mail-hosting fragment once:
+
+``` text
+include "/etc/mailserver/generated/smtpd-mailhosting.conf"
+```
+
+Do not copy host-specific relay credentials or relay hosts into the
+lazy-admin-tools scripts.
+
+The generated fragment references its generation's OpenSMTPD tables.
+
+## Existing system aliases
+
+A normal host `/etc/aliases` setup can remain in place.
+
+For example, host administration may forward `root` to a hosted address.
+OpenSMTPD can expand the system alias first and then continue through
+the generated virtual-mail tables.
+
+Keep system aliases conceptually separate from hosted-domain aliases in
+`/etc/mailserver/aliases`.
+
+## First test domain
+
+Create a canonical domain:
+
+``` bash
+sudo ./mail-domain-add.sh example.org
+```
+
+Add a mailbox:
+
+``` bash
+sudo ./mail-mailbox-add.sh user@example.org
+```
+
+The command asks for the password twice and generates a SHA512-Crypt
+hash using Dovecot tooling.
+
+For migration from an existing compatible system, an existing hash can
+be supplied:
+
+``` bash
+sudo ./mail-mailbox-add.sh --hash '$6$rounds=5000$...' user@example.org
+```
+
+Add an alias:
+
+``` bash
+sudo ./mail-alias-add.sh contact@example.org user@example.org
+```
+
+Optionally add an alias domain:
+
+``` bash
+sudo ./mail-domain-alias-add.sh example.net example.org
+```
+
+## Validate before deployment
+
+First validate the source of truth:
+
+``` bash
+sudo ./mailserver-validate.sh
+```
+
+Then generate artifacts:
+
+``` bash
+sudo ./mailserver-generate.sh
+```
+
+Then validate the generated artifacts:
+
+``` bash
+sudo ./mailserver-validate-generated.sh
+```
+
+A normal production deployment performs these checks again as part of
+its own workflow.
+
+## First deploy
+
+Run:
+
+``` bash
+sudo ./mailserver-deploy.sh
+```
+
+The generation-based deploy:
+
+1.  validates the store;
+2.  verifies that the current production OpenSMTPD and Dovecot
+    configuration is healthy;
+3.  builds a fresh generation;
+4.  validates that generation independently;
+5.  backs up the current Dovecot users file;
+6.  atomically promotes the new generation through
+    `/etc/mailserver/generated`;
+7.  validates production OpenSMTPD against the promoted generation;
+8.  installs the generated Dovecot users file;
+9.  restarts Dovecot and OpenSMTPD;
+10. performs a live Dovecot user lookup when a mailbox exists;
+11. retains the previous generation and credential backup for
+    rollback/audit purposes.
+
+An existing legacy `/etc/mailserver/generated/` directory is preserved
+during the first generation-based deploy as a `pre-generations-*`
+generation.
+
+## Functional verification
+
+After deployment, test both a direct mailbox and a local alias.
+
+For example:
+
+``` bash
+echo "direct test" | mail -s "mailserver test" user@example.org
+echo "alias test" | mail -s "mailserver alias test" contact@example.org
+```
+
+Verify delivery in the expected Maildir or through IMAP.
+
+The reference implementation has also been tested for:
+
+-   local alias to mailbox delivery;
+-   alias-domain recipient expansion;
+-   external alias forwarding through the existing outbound relay;
+-   system alias -\> hosted alias/mailbox expansion.
+
+## DNS, certificates, and client autoconfiguration
+
+The data model already defines conventional hostname patterns for MX,
+IMAP, and SMTP.
+
+Automatic DNS provisioning, certificate provisioning, DKIM/SPF/DMARC
+automation, and client autoconfiguration are not documented here as
+completed v1 behavior unless corresponding tools are present and tested.
+
+Do not infer those features merely from the configuration keys.
