@@ -210,8 +210,15 @@ action "dovecot" lmtp "$DOVECOT_LMTP_SOCKET" rcpt-to virtual <virtual_local>
 action "forward" forward-only virtual <virtual_forward>
 
 match for domain <localdomains> action "system"
-match for rcpt-to <local_recipients> action "dovecot"
-match for rcpt-to <forward_recipients> action "forward"
+
+# 'from any' is required here: a match rule without an explicit
+# 'from' defaults to 'from local' (see smtpd.conf(5)), which would
+# silently reject all externally submitted mail with
+# "550 Invalid recipient". This is not an open relay - rcpt-to is
+# still restricted to the known local_recipients/forward_recipients
+# tables; only the source restriction is lifted.
+match from any for rcpt-to <local_recipients> action "dovecot"
+match from any for rcpt-to <forward_recipients> action "forward"
 EOF
 chmod 644 "$OUT/smtpd-mailhosting.conf"
 
