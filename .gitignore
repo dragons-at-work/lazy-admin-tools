@@ -1,4 +1,5 @@
 tools/gitea
 .env
+.temp
 makeissue.sh
 issue-*.md
