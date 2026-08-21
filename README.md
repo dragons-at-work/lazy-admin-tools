@@ -6,8 +6,9 @@ lazy-admin-tools provides focused administration helpers for small
 servers - no framework, no database, no container stack, and no
 unnecessary infrastructure.
 
-The repository currently contains cron-friendly server health checks and
-a declarative multi-domain mail administration toolset.
+The repository currently contains cron-friendly server health checks,
+a declarative multi-domain mail administration toolset, and a
+backend-agnostic TLS certificate request tool.
 
 **Status:** Active · **Platforms:** see individual tool sections ·
 **License:** ISC
@@ -31,6 +32,7 @@ The repository currently contains:
     servers
 -   `mail/` - declarative multi-domain mail administration for OpenSMTPD
     and Dovecot
+-   `cert/` - backend-agnostic TLS certificate request tool (ACME)
 
 ## What problem does it solve?
 
@@ -38,10 +40,10 @@ Small servers often need reliable administration without the operational
 cost of another platform.
 
 Disk usage, service state, listening ports, pending patches, mail
-domains, mailboxes, aliases, and deployment safety are all real
-administration problems. Solving each of them with a large management or
-monitoring stack can mean running more software than the actual task
-justifies.
+domains, mailboxes, aliases, TLS certificates, and deployment safety
+are all real administration problems. Solving each of them with a
+large management or monitoring stack can mean running more software
+than the actual task justifies.
 
 lazy-admin-tools provides deliberately small tools for these jobs: plain
 configuration, explicit behavior, readable scripts, and no background
@@ -73,6 +75,20 @@ See [`mail/README.md`](mail/README.md) for the mail toolset's detailed
 status, architecture, configuration, installation, and operations
 documentation.
 
+### Certificate requests
+
+-   Functional v1, single frontend command (`cert-add`)
+-   `uacme` backend implemented and tested end-to-end against the real
+    Let's Encrypt API on Debian 13 (account bootstrap, http-01
+    challenge, SAN certificate issuance)
+-   `acme-client` backend (OpenBSD) is planned but not built yet -
+    selecting it explicitly fails clearly rather than silently
+    falling back
+-   No default ACME account email is built in; first use on a host
+    prompts interactively or reads `ACME_ACCOUNT_EMAIL`
+
+See [`cert/README.md`](cert/README.md) for usage and architecture.
+
 ## Repository structure
 
 ``` text
@@ -82,26 +98,34 @@ lazy-admin-tools/
 ├── health/
 │   ├── openbsd-health.sh
 │   └── debian-health.sh
-└── mail/
+├── mail/
+│   ├── README.md
+│   ├── mailserver-init.sh
+│   ├── mail-domain-add.sh
+│   ├── mail-domain-create.sh
+│   ├── mail-domain-del.sh
+│   ├── mail-domain-alias-add.sh
+│   ├── mail-domain-alias-del.sh
+│   ├── mail-mailbox-add.sh
+│   ├── mail-mailbox-del.sh
+│   ├── mail-alias-add.sh
+│   ├── mail-alias-del.sh
+│   ├── mailserver-generate.sh
+│   ├── mailserver-validate.sh
+│   ├── mailserver-validate-generated.sh
+│   ├── mailserver-deploy.sh
+│   └── docs/
+│       ├── architecture.md
+│       ├── configuration.md
+│       ├── installation.md
+│       └── operations.md
+└── cert/
     ├── README.md
-    ├── mailserver-init.sh
-    ├── mail-domain-add.sh
-    ├── mail-domain-del.sh
-    ├── mail-domain-alias-add.sh
-    ├── mail-domain-alias-del.sh
-    ├── mail-mailbox-add.sh
-    ├── mail-mailbox-del.sh
-    ├── mail-alias-add.sh
-    ├── mail-alias-del.sh
-    ├── mailserver-generate.sh
-    ├── mailserver-validate.sh
-    ├── mailserver-validate-generated.sh
-    ├── mailserver-deploy.sh
-    └── docs/
-        ├── architecture.md
-        ├── configuration.md
-        ├── installation.md
-        └── operations.md
+    ├── cert-add.sh
+    ├── backends/
+    │   └── uacme.sh
+    └── hooks/
+        └── uacme-http-01.sh
 ```
 
 The repository is grouped by function first, platform second.
@@ -144,6 +168,26 @@ The mail tools have additional OpenSMTPD/Dovecot prerequisites and
 deployment requirements. Follow
 [`mail/docs/installation.md`](mail/docs/installation.md) before using
 them on a server.
+
+### Certificate requests
+
+Keep the certificate toolset together below:
+
+``` text
+/usr/local/lib/lazy-admin-tools/cert/
+```
+
+Administrator-facing commands can additionally be exposed through
+`/usr/local/sbin` using symlinks, e.g.:
+
+``` sh
+sudo ln -sf /usr/local/lib/lazy-admin-tools/cert/cert-add.sh /usr/local/sbin/cert-add
+```
+
+The `uacme` backend requires `uacme` itself, a system user it runs as,
+a challenge directory served on port 80 by the host's webserver, and
+port 80 (IPv4 and IPv6) reachable from the internet. See
+[`cert/README.md`](cert/README.md) for details.
 
 ## Usage
 
@@ -248,6 +292,17 @@ Do not treat these examples as a substitute for initial setup. Read
 [`mail/docs/installation.md`](mail/docs/installation.md) before the
 first deployment.
 
+### Certificate requests
+
+``` sh
+sudo cert-add primary.example.org alias1.example.org alias2.example.org
+```
+
+The first name is the primary identifier and determines where the
+certificate is stored; any further names are requested as additional
+SANs. See [`cert/README.md`](cert/README.md) for the full usage
+contract, including first-time ACME account setup.
+
 ## Documentation
 
 Health-check usage is documented in this README and in the scripts
@@ -262,6 +317,9 @@ substantially larger:
 -   [`mail/docs/configuration.md`](mail/docs/configuration.md)
 -   [`mail/docs/installation.md`](mail/docs/installation.md)
 -   [`mail/docs/operations.md`](mail/docs/operations.md)
+
+The certificate request tool's usage, architecture, and backend
+contract are documented in [`cert/README.md`](cert/README.md).
 
 ## Development and Testing
 
@@ -286,6 +344,12 @@ check the declarative store, generated configuration, current production
 configuration, service restart, and live Dovecot user resolution.
 
 OpenBSD support for the mail toolset has not yet been tested.
+
+The certificate tool's `uacme` backend has been tested end-to-end
+against the real Let's Encrypt API on Debian 13, including account
+bootstrap and http-01 issuance, verified with a live TLS connection to
+the resulting certificate. Its `acme-client` backend for OpenBSD is
+planned but not yet implemented.
 
 ## Contributing
 
