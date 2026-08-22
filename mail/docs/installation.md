@@ -74,19 +74,34 @@ deployment.
 
 The mailserver tools deliberately do not replace `/etc/smtpd.conf`.
 
-The host configuration remains responsible for listeners, system
-aliases, local host mail, and outbound relay configuration.
+The host configuration remains responsible for the local system-mail
+listener, system aliases, local host mail, and outbound relay
+configuration.
 
-Add the generated mail-hosting fragment once:
+Add the generated fragments once:
 
 ``` text
 include "/etc/mailserver/generated/smtpd-mailhosting.conf"
+include "/etc/mailserver/generated/smtpd-mailtls.conf"
 ```
+
+`smtpd-mailtls.conf` also generates the listeners for ports 25 and
+587 covering all hosted domains (SNI-multiplexed) - do not add
+separate host-level `listen ... port 25`/`port 587` lines for hosted
+mail, or the two will conflict at bind time (`Address already in
+use`) even though `smtpd -n` parses both individually without
+complaint.
+
+Before this fragment will generate successfully, every canonical
+domain needs a certificate already issued and deployed under
+`/etc/ssl/local/<mx-hostname>/` - see the separate `cert/` toolset
+(`cert-add`, `cert-deploy`).
 
 Do not copy host-specific relay credentials or relay hosts into the
 lazy-admin-tools scripts.
 
-The generated fragment references its generation's OpenSMTPD tables.
+The generated fragments reference their generation's OpenSMTPD
+tables.
 
 ## Existing system aliases
 

@@ -227,6 +227,18 @@ credentials (e.g. for other hosts relaying through this one) are a
 separate future source; a later version of this script will merge
 them in here without needing to be real mailboxes.
 
+`smtpd-mailtls.conf` generates a `pki` block and SNI-multiplexed
+listeners (ports 25 and 587) for every canonical domain, using
+`mx_hostname_pattern`/`smtp_hostname_pattern`/`imap_hostname_pattern`
+(global or per-domain via `domain-overrides`) to compute the expected
+hostnames. Generation fails closed: every domain must already have a
+matching, name-complete certificate deployed under `/etc/ssl/local/`
+(by the separate `cert/` toolset) - missing, mismatched (checked via
+public key comparison), or incomplete (checked via the certificate's
+SANs) fails the entire run rather than producing a domain without
+TLS. See [`../docs/architecture.md`](architecture.md) for how this
+fragment relates to `smtpd-mailhosting.conf`.
+
 A generation contains:
 
 ``` text
@@ -238,6 +250,7 @@ smtpd-forward-recipients
 virtual-local
 virtual-forward
 smtpd-mailhosting.conf
+smtpd-mailtls.conf
 ```
 
 These files are regenerated from the store and must not be edited as

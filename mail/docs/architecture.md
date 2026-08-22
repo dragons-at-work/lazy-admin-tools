@@ -56,19 +56,49 @@ The tools do not own the complete `/etc/smtpd.conf`.
 
 Host-specific concerns remain in the host configuration, for example:
 
--   listeners;
 -   system aliases such as `root`;
 -   local host domains;
 -   the outbound relay or smarthost;
 -   relay authentication;
 -   host-specific envelope sender policy.
 
-The mailserver tools generate a mail-hosting fragment. The host
-configuration includes it once:
+The mailserver tools generate two fragments. The host configuration
+includes both once:
 
 ``` text
 include "/etc/mailserver/generated/smtpd-mailhosting.conf"
+include "/etc/mailserver/generated/smtpd-mailtls.conf"
 ```
+
+`smtpd-mailhosting.conf` covers routing: domain/recipient tables and
+the actions that deliver to Dovecot or forward externally.
+
+`smtpd-mailtls.conf` covers TLS for hosted mail: a `pki` block per
+canonical domain plus SNI-multiplexed listeners on ports 25 and 587
+covering every domain's certificate on a single pair of listeners
+(one per port, IPv4 and IPv6). This is the one place where this
+toolset does generate listeners - specifically because the certificate
+selection (SNI) is inseparable from the per-domain hostname/cert
+mapping the store already owns.
+
+Do not add a separate host-level `listen on localhost` (or any other
+listener) for port 25 or 587 - `smtpd-mailtls.conf`'s wildcard
+listeners already accept local system mail on those ports too (e.g.
+via `127.0.0.1:25`/`::1:25`), and a second listener bound to the same
+port causes OpenSMTPD to fail at startup with `dispatcher: listen:
+Address already in use`. This was hit for real during initial
+rollout: `smtpd -n` (syntax check only, never binds a socket) does
+not catch it - only `smtpd -f ... -d`/`systemctl restart opensmtpd`
+attempts the actual `bind(2)` and fails. Local system mail continues
+to work without a dedicated `listen on localhost` because the
+wildcard listeners already cover loopback addresses.
+
+Generating `smtpd-mailtls.conf` fails closed: every canonical domain
+must already have a matching, name-complete certificate deployed
+under `/etc/ssl/local/` (via the separate `cert/` toolset) before
+generation succeeds. A missing, mismatched, or incomplete certificate
+for any one domain aborts the entire generation run rather than
+silently producing hosted mail without TLS for that domain.
 
 This allows hosted mail configuration to be regenerated without
 rewriting unrelated OpenSMTPD configuration.

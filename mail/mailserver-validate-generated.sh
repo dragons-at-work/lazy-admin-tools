@@ -3,10 +3,11 @@
 # Usage: mailserver-validate-generated [--dir DIR]
 #
 # Builds a throwaway smtpd.conf that includes the real, generated
-# smtpd-mailhosting.conf fragment from DIR (default:
-# /etc/mailserver/generated), and a throwaway dovecot.conf referencing
-# DIR/dovecot-users. Runs "smtpd -n" / "doveconf -n" against them.
-# Never touches the production /etc/smtpd.conf or /etc/dovecot.
+# smtpd-mailhosting.conf and smtpd-mailtls.conf fragments from DIR
+# (default: /etc/mailserver/generated), and a throwaway dovecot.conf
+# referencing DIR/dovecot-users. Runs "smtpd -n" / "doveconf -n"
+# against them. Never touches the production /etc/smtpd.conf or
+# /etc/dovecot.
 #
 # mailserver-deploy calls this with --dir pointing at a staged
 # generation directory, so a new generation can be fully validated
@@ -24,6 +25,15 @@
 # via /run/dovecot/auth-userdb regardless of -c, making an isolated
 # pre-deploy user lookup impossible on a host with dovecot already
 # running.
+#
+# The "listen on localhost" line below is only for this throwaway
+# config, to give smtpd-mailhosting.conf's <localdomains> match
+# something to test against. It is NOT something the real host
+# config should also have alongside smtpd-mailtls.conf's port 25/587
+# listeners - "smtpd -n" only checks syntax and never binds a socket,
+# so it cannot catch the real host actually failing to start with
+# "dispatcher: listen: Address already in use" the way a duplicate
+# listener on the same port does at runtime. See architecture.md.
 
 set -euo pipefail
 
@@ -51,7 +61,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 	exit 1
 fi
 
-for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-mailhosting.conf; do
+for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-mailhosting.conf smtpd-mailtls.conf; do
 	if [[ ! -f "$GEN/$f" ]]; then
 		echo "[ERROR] $GEN/$f not found - run mailserver-generate first" >&2
 		exit 1
@@ -80,6 +90,7 @@ table localdomains { "validator-host", "localhost" }
 listen on localhost
 
 include "$GEN/smtpd-mailhosting.conf"
+include "$GEN/smtpd-mailtls.conf"
 
 action "outbound" relay
 
@@ -87,9 +98,9 @@ match from local for any action "outbound"
 EOF
 
 if smtpd -f "$TMP_SMTPD_CONF" -n; then
-	echo "[OK] generated smtpd-mailhosting.conf is valid ($GEN)"
+	echo "[OK] generated smtpd-mailhosting.conf and smtpd-mailtls.conf are valid ($GEN)"
 else
-	echo "[ERROR] generated smtpd-mailhosting.conf is invalid ($GEN)" >&2
+	echo "[ERROR] generated smtpd-mailhosting.conf or smtpd-mailtls.conf is invalid ($GEN)" >&2
 	ERRORS=$((ERRORS + 1))
 fi
 
