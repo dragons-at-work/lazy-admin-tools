@@ -126,6 +126,7 @@ lazy-admin-tools/
     ├── cert-deploy.sh
     ├── cert-renew.sh
     ├── cert-renew-install.sh
+    ├── cert-del.sh
     ├── backends/
     │   └── uacme.sh
     └── hooks/

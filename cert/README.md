@@ -116,6 +116,29 @@ Reload targets per certificate are read from an optional manifest:
 One service name per line, `#` comments and blank lines ignored. No
 manifest means files are deployed but nothing is restarted.
 
+## Removing certificates
+
+```bash
+sudo cert-del primary.example.org
+```
+
+Removes the ACME backend's local state and the deployed copy under
+`/etc/ssl/local/primary.example.org/`. Does **not** revoke the
+certificate at the CA - that is a separate, more destructive
+operation for cases like a compromised key, not implemented here.
+Does not touch any service configuration that might reference this
+certificate.
+
+Refuses to delete if a service-reload manifest
+(`/etc/cert-deploy/<primary-name>.services`) exists for this
+certificate - that manifest is this toolset's own record of a known
+consumer on this host. Override with `--force`, which also removes
+the manifest itself as part of the cleanup:
+
+```bash
+sudo cert-del --force primary.example.org
+```
+
 ## Architecture
 
 ```text
@@ -132,14 +155,18 @@ cert-renew.sh                 frontend: renew every known certificate
 cert-renew-install.sh          frontend: schedule cert-renew for this
                                 host (cron.d or root's crontab,
                                 whichever fits)
+cert-del.sh                     frontend: remove a certificate's local
+                                 state - refuses if a service manifest
+                                 marks it as still in use (no revoke)
 backends/
   uacme.sh                 uacme-specific: account bootstrap, hook
                             probe, issue call. Also answers "paths"
                             (where are this certificate's files),
                             "list" (which certificates exist, with
-                            their SANs), and "renew" (renew + report
+                            their SANs), "renew" (renew + report
                             whether the certificate file actually
-                            changed) for the other frontends.
+                            changed), and "del" (remove local state
+                            only, no revoke) for the other frontends.
   acme-client.sh            planned (OpenBSD), not present yet
 hooks/
   uacme-http-01.sh           http-01 hook for uacme
@@ -166,8 +193,21 @@ Debian, `acme-client` planned for OpenBSD).
 `cert-add` only checks what it can actually verify:
 
 - domain syntax of every requested name
-- DNS A/AAAA resolution (checked locally, not from the ACME server's
-  point of view)
+- DNS A/AAAA resolution, checked twice: via the local/system resolver
+  (`dig` if available, `host` otherwise - `dig` is not installed on
+  every host this runs on), and directly against the name's own
+  authoritative nameservers, using whichever of the two tools is
+  present. The local resolver alone is not sufficient - a caching or
+  split-horizon resolver can report success even when the
+  authoritative nameservers, which is what Let's Encrypt actually
+  sees, do not have the record. This was found for real in two parts:
+  a name with no DNS record at all was still reported as resolving,
+  because `host`'s own "not found" message is non-empty text on
+  stdout, not an empty result - checking for empty output treated
+  that message itself as a successful resolution. Fixed by checking
+  `host`'s exit status instead. The authoritative-nameserver check was
+  added on top for the same underlying concern (local view diverging
+  from the public one) and confirmed against the same real name.
 - the hook can write and remove a file in the challenge directory as
   the `uacme` user (local proof only)
 

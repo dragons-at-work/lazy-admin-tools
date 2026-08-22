@@ -53,7 +53,16 @@ done
 
 # --- DNS preflight: can only warn about what we can actually check.
 #     A successful local resolution does not prove Let's Encrypt can
-#     reach the host - the ACME issue step remains the real proof. ---
+#     reach the host - the ACME issue step remains the real proof.
+#
+#     The system/local resolver alone is not reliable enough for this
+#     check: a caching or split-horizon resolver can report a name as
+#     resolving even when the domain's own authoritative nameservers
+#     do not have a record for it - which is exactly what Let's
+#     Encrypt's validation sees. So beyond the local resolver, this
+#     also queries the name's authoritative nameservers directly
+#     (found by walking up from the full name to its registrable
+#     domain) and requires the record to exist there too. ---
 DNS_TOOL=""
 if command -v dig >/dev/null 2>&1; then
 	DNS_TOOL=dig
@@ -61,20 +70,85 @@ elif command -v host >/dev/null 2>&1; then
 	DNS_TOOL=host
 fi
 
+# Find authoritative nameservers for a name by walking up its labels
+# until an NS record is found. Prints nameserver hostnames, one per
+# line, or nothing if none could be determined. Works with either
+# tool, since dig is not guaranteed to be installed (it is not, on
+# some real hosts this runs on).
+find_authoritative_ns() {
+	local fqdn="$1"
+	local tool="$2"
+	local domain="$fqdn"
+	while [[ "$domain" == *.* ]]; do
+		local ns
+		if [[ "$tool" == dig ]]; then
+			ns=$(dig +short NS "$domain" 2>/dev/null)
+		else
+			ns=$(host -t NS "$domain" 2>/dev/null | awk '/name server/ {print $NF}' | sed 's/\.$//')
+		fi
+		if [[ -n "$ns" ]]; then
+			echo "$ns"
+			return 0
+		fi
+		domain="${domain#*.}"
+	done
+	return 1
+}
+
+# Query a specific nameserver directly for a name's A/AAAA records.
+# Returns success (name found there) via exit status, tool-neutral.
+query_authoritative() {
+	local name="$1"
+	local ns="$2"
+	local tool="$3"
+	if [[ "$tool" == dig ]]; then
+		local result
+		result="$(dig +short A "$name" "@$ns") $(dig +short AAAA "$name" "@$ns")"
+		[[ -n "${result// /}" ]]
+	else
+		host "$name" "$ns" >/dev/null 2>&1
+	fi
+}
+
 if [[ -n "$DNS_TOOL" ]]; then
 	for name in "${NAMES[@]}"; do
-		RESOLVED=""
 		if [[ "$DNS_TOOL" == dig ]]; then
 			RESOLVED="$(dig +short A "$name") $(dig +short AAAA "$name")"
+			if [[ -z "${RESOLVED// /}" ]]; then
+				echo "[ERROR] no DNS A/AAAA record found for $name" >&2
+				exit 1
+			fi
 		else
-			RESOLVED="$(host "$name" 2>/dev/null || true)"
+			# host's own "not found" message is non-empty text on
+			# stdout, not an empty result - a plain "output is empty"
+			# check treats that message itself as a successful
+			# resolution. Use host's exit status instead (0 = found,
+			# non-zero = NXDOMAIN/SERVFAIL/etc.) - confirmed for real:
+			# a name with no DNS record at all was reported as
+			# resolving by this check before the fix.
+			if ! host "$name" >/dev/null 2>&1; then
+				echo "[ERROR] no DNS A/AAAA record found for $name" >&2
+				exit 1
+			fi
 		fi
-		if [[ -z "${RESOLVED// /}" ]]; then
-			echo "[ERROR] no DNS A/AAAA record found for $name" >&2
-			exit 1
+
+		AUTH_NS_LIST="$(find_authoritative_ns "$name" "$DNS_TOOL" || true)"
+		if [[ -n "$AUTH_NS_LIST" ]]; then
+			AUTH_OK=no
+			while IFS= read -r ns; do
+				[[ -z "$ns" ]] && continue
+				if query_authoritative "$name" "$ns" "$DNS_TOOL"; then
+					AUTH_OK=yes
+					break
+				fi
+			done <<< "$AUTH_NS_LIST"
+			if [[ "$AUTH_OK" != yes ]]; then
+				echo "[ERROR] $name resolves via the local resolver, but not via its own authoritative nameservers - DNS is likely not live yet or not propagated" >&2
+				exit 1
+			fi
 		fi
 	done
-	echo "[OK] all names resolve in DNS"
+	echo "[OK] all names resolve in DNS (local and authoritative)"
 else
 	echo "[WARN] no dig/host available - skipping DNS preflight" >&2
 fi

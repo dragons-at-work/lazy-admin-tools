@@ -1,10 +1,11 @@
 #!/bin/bash
-# lazy-admin-tools: uacme backend for cert-add / cert-deploy / cert-renew
+# lazy-admin-tools: uacme backend for cert-add / cert-deploy / cert-renew / cert-del
 # Usage (called by the cert-* frontends only):
 #   uacme.sh add    <primary> [san...]
 #   uacme.sh paths  <primary>
 #   uacme.sh list
 #   uacme.sh renew  <primary> [san...]
+#   uacme.sh del    <primary>
 #
 # Owns everything uacme-specific: account bootstrap under /var/lib/uacme,
 # the http-01 hook, the issue call, and where/how uacme stores its
@@ -29,9 +30,9 @@ HOOK="$(cd "$BACKEND_DIR/../hooks" && pwd)/uacme-http-01.sh"
 
 SUBCOMMAND="${1:-}"
 case "$SUBCOMMAND" in
-	add|paths|renew|list) shift ;;
+	add|paths|renew|list|del) shift ;;
 	*)
-		echo "Usage: uacme.sh add|paths|renew <primary> [san...] | list" >&2
+		echo "Usage: uacme.sh add|paths|renew|del <primary> [san...] | list" >&2
 		exit 2
 		;;
 esac
@@ -72,6 +73,21 @@ SANS=("$@")
 if [[ "$SUBCOMMAND" == paths ]]; then
 	echo "$CONFDIR/$PRIMARY/cert.pem"
 	echo "$CONFDIR/private/$PRIMARY/key.pem"
+	exit 0
+fi
+
+# --- del: remove local ACME backend state only. Deliberately not a
+#     revoke - revoking is a separate, more destructive operation
+#     (e.g. for a compromised key) that a caller must request
+#     explicitly and is not implemented here. No ACME calls, no
+#     hook/account requirements - this is pure local cleanup. ---
+if [[ "$SUBCOMMAND" == del ]]; then
+	if [[ ! -d "$CONFDIR/$PRIMARY" && ! -d "$CONFDIR/private/$PRIMARY" ]]; then
+		echo "[ERROR] no local state found for $PRIMARY under $CONFDIR" >&2
+		exit 1
+	fi
+	rm -rf "$CONFDIR/$PRIMARY" "$CONFDIR/private/$PRIMARY"
+	echo "[OK] removed local ACME state: $PRIMARY"
 	exit 0
 fi
 
