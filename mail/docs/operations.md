@@ -93,6 +93,54 @@ sudo ./mail-alias-add.sh accounting@example.org accounting@example.net
 For a target inside a managed canonical domain, the target must be an
 existing mailbox. Alias chains are not supported in v1.
 
+## DKIM
+
+Create a persistent DKIM keypair for a domain:
+
+``` bash
+sudo ./mail-dkim-create.sh biocodie.de
+```
+
+The selector defaults to `dkim_selector` from `config` (or a
+per-domain override in `domain-overrides`); pass one explicitly if
+neither is set:
+
+``` bash
+sudo ./mail-dkim-create.sh biocodie.de mail
+```
+
+This only creates the key under `/etc/mail/dkim/<domain>.<selector>.key`
+(owned by `_dkimsign`, the `opensmtpd-filter-dkimsign` system user) and
+prints the DNS TXT record to publish. It does not touch DNS and does
+not wire up the OpenSMTPD filter - both remain manual steps.
+
+The key is long-lived state, like a certificate's private key -
+`mail-dkim-create` refuses to overwrite an existing one without
+`--force`, since a new key invalidates whatever is already published
+in DNS.
+
+**Wiring the filter is currently manual, proven for a single domain
+only.** `filter-dkimsign` takes one key and one selector per filter
+instance; multiple independent domains would need multiple filter
+instances chained on the same listener, and whether OpenSMTPD/
+opensmtpd-filter-dkimsign signs correctly per-domain in that
+configuration (versus e.g. every message getting signed by every
+filter in the chain regardless of its actual domain) has not been
+verified. `mailserver-generate` therefore does not yet generate a
+DKIM filter fragment. Until a second real domain has been proven
+end-to-end, wire the filter by hand:
+
+``` text
+filter "dkimsign" proc-exec "filter-dkimsign -d <domain> -s <selector> -k /etc/mail/dkim/<domain>.<selector>.key" user _dkimsign group _dkimsign
+```
+
+attached only to the port 587 (submission) listeners, not port 25 -
+this signs mail entering via authenticated submission, not mail
+merely relayed through the host. Proven end-to-end against a real
+external DKIM checker: `dkim=pass`, `header.d` matching the `From:`
+domain, delivered through the existing relay path without the
+signature breaking.
+
 ## Validate the store
 
 Run after administrative changes:

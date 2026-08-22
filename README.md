@@ -109,6 +109,7 @@ lazy-admin-tools/
 │   ├── mail-domain-alias-del.sh
 │   ├── mail-mailbox-add.sh
 │   ├── mail-mailbox-del.sh
+│   ├── mail-dkim-create.sh
 │   ├── mail-alias-add.sh
 │   ├── mail-alias-del.sh
 │   ├── mailserver-generate.sh
@@ -301,7 +302,7 @@ scope.
 ### Mail administration
 
 The mail toolset manages canonical domains, alias domains, mailboxes,
-aliases, generation, validation, and deployment.
+aliases, DKIM keys, generation, validation, and deployment.
 
 Typical administration commands include:
 
@@ -309,6 +310,7 @@ Typical administration commands include:
 sudo mail-domain-add example.org
 sudo mail-mailbox-add user@example.org
 sudo mail-alias-add contact@example.org user@example.org
+sudo mail-dkim-create example.org
 sudo mailserver-validate
 sudo mailserver-deploy
 ```
