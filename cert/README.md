@@ -246,6 +246,12 @@ where a service can actually read it - see below.
   distinguish them, so `renew` treats a changed certificate file as
   the primary signal and only falls back to uacme's own wording as a
   secondary check when the file did not change.
+- The same skip-vs-failure ambiguity was found in `add` (not just
+  `renew`) via a real case: re-running `cert-add` for a certificate
+  that already existed and was not yet due for renewal was wrongly
+  reported as "[ERROR] uacme issue failed" even though nothing was
+  wrong. Fixed the same way - the certificate file's existence after
+  the call is the source of truth, not the exit code alone.
 - cert-renew: the "certificate still valid, nothing to do" path has
   been proven end-to-end in production against the real Let's Encrypt
   API - real ARI renewal window read from the CA, correct RENEWED=no,

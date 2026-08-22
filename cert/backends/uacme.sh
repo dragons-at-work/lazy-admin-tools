@@ -203,7 +203,32 @@ fi
 
 # --- Issue ---
 echo "[INFO] requesting certificate: $PRIMARY ${SANS[*]-}"
-if ! sudo -u "$UACME_USER" uacme -v -c "$CONFDIR" -h "$HOOK" issue "$PRIMARY" "${SANS[@]}"; then
+set +e
+ISSUE_OUTPUT=$(sudo -u "$UACME_USER" uacme -v -c "$CONFDIR" -h "$HOOK" issue "$PRIMARY" "${SANS[@]}" 2>&1)
+ISSUE_EXIT=$?
+set -e
+echo "$ISSUE_OUTPUT"
+
+# Same distinction as the renew path: uacme exits non-zero both on a
+# real failure and on its normal "not due for renewal yet" skip (this
+# can legitimately happen here too - e.g. re-running cert-add after
+# cert-deploy already installed a still-valid certificate, as
+# happened for real: the certificate existed, was not near expiry,
+# uacme skipped it and exited non-zero, and this was wrongly reported
+# as "[ERROR] uacme issue failed" even though nothing was actually
+# wrong). The certificate file existing is the source of truth for
+# "do we have something usable now", not uacme's exit code alone.
+CERT_FILE="$CONFDIR/$PRIMARY/cert.pem"
+if [[ -f "$CERT_FILE" ]]; then
+	if [[ "$ISSUE_EXIT" -ne 0 ]]; then
+		if echo "$ISSUE_OUTPUT" | grep -qi "skipping"; then
+			echo "[OK] certificate already exists and is still valid: $PRIMARY"
+		else
+			echo "[ERROR] uacme issue failed for $PRIMARY" >&2
+			exit 1
+		fi
+	fi
+else
 	echo "[ERROR] uacme issue failed for $PRIMARY" >&2
 	exit 1
 fi
