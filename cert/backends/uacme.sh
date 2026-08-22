@@ -1,10 +1,17 @@
 #!/bin/bash
-# lazy-admin-tools: uacme backend for cert-add
-# Usage (called by cert-add.sh only): uacme.sh add <primary> [san...]
+# lazy-admin-tools: uacme backend for cert-add / cert-deploy / cert-renew
+# Usage (called by the cert-* frontends only):
+#   uacme.sh add    <primary> [san...]
+#   uacme.sh paths  <primary>
+#   uacme.sh list
+#   uacme.sh renew  <primary> [san...]
 #
 # Owns everything uacme-specific: account bootstrap under /var/lib/uacme,
-# the http-01 hook, and the issue call. cert-add.sh does not know uacme
-# option syntax - only this file does.
+# the http-01 hook, the issue call, and where/how uacme stores its
+# output. The frontends (cert-add, cert-deploy, cert-renew) do not know
+# uacme's option syntax or on-disk layout - only this file does. In
+# particular cert-renew.sh knows nothing about /var/lib/uacme: it asks
+# this backend for the list of certificates it manages via "list".
 
 set -euo pipefail
 
@@ -20,11 +27,34 @@ UACME_USER=uacme
 BACKEND_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 HOOK="$(cd "$BACKEND_DIR/../hooks" && pwd)/uacme-http-01.sh"
 
-if [[ "${1:-}" != "add" ]]; then
-	echo "Usage: uacme.sh add <primary> [san...]" >&2
-	exit 2
+SUBCOMMAND="${1:-}"
+case "$SUBCOMMAND" in
+	add|paths|renew|list) shift ;;
+	*)
+		echo "Usage: uacme.sh add|paths|renew <primary> [san...] | list" >&2
+		exit 2
+		;;
+esac
+
+# --- list: which certificates does this backend manage? One line per
+#     certificate: "<primary> <san1> <san2> ...". No ACME calls, no
+#     root/hook requirements - pure discovery, so cert-renew.sh never
+#     needs to know where or how uacme stores anything. ---
+if [[ "$SUBCOMMAND" == list ]]; then
+	if [[ ! -d "$CONFDIR" ]]; then
+		exit 0
+	fi
+	for cert_dir in "$CONFDIR"/*/; do
+		[[ -d "$cert_dir" ]] || continue
+		primary="$(basename "$cert_dir")"
+		[[ "$primary" == private ]] && continue
+		[[ -f "$cert_dir/cert.pem" ]] || continue
+		sans="$(openssl x509 -in "$cert_dir/cert.pem" -noout -ext subjectAltName 2>/dev/null \
+			| grep -o 'DNS:[^,]*' | sed 's/DNS://g' | grep -vx "$primary" | tr '\n' ' ' | xargs || true)"
+		echo "$primary $sans"
+	done
+	exit 0
 fi
-shift
 
 if [[ $# -lt 1 ]]; then
 	echo "[ERROR] at least one identifier required" >&2
@@ -34,6 +64,16 @@ fi
 PRIMARY="$1"
 shift
 SANS=("$@")
+
+# --- paths: pure lookup, no ACME calls, no root/hook requirements.
+#     Prints "cert-path\nkey-path\n" for the given primary. Used by
+#     cert-deploy to find what to copy, without cert-deploy needing
+#     to know uacme's directory layout. ---
+if [[ "$SUBCOMMAND" == paths ]]; then
+	echo "$CONFDIR/$PRIMARY/cert.pem"
+	echo "$CONFDIR/private/$PRIMARY/key.pem"
+	exit 0
+fi
 
 if ! command -v uacme >/dev/null 2>&1; then
 	echo "[ERROR] uacme not installed" >&2
@@ -72,6 +112,48 @@ if [[ -f "$CHALLENGE_DIR/$PROBE_TOKEN" ]]; then
 	exit 1
 fi
 echo "[OK] local HTTP-01 challenge path works"
+
+if [[ "$SUBCOMMAND" == renew ]]; then
+	# Renewal is unattended (cron): never prompt for an account email.
+	if [[ ! -f "$CONFDIR/private/key.pem" ]]; then
+		echo "[ERROR] no ACME account found under $CONFDIR - run 'cert-add' interactively first" >&2
+		exit 1
+	fi
+
+	CERT_FILE="$CONFDIR/$PRIMARY/cert.pem"
+	BEFORE_HASH=""
+	[[ -f "$CERT_FILE" ]] && BEFORE_HASH="$(sha256sum "$CERT_FILE" | awk '{print $1}')"
+
+	echo "[INFO] checking certificate: $PRIMARY ${SANS[*]-}"
+	set +e
+	ISSUE_OUTPUT=$(sudo -u "$UACME_USER" uacme -v -c "$CONFDIR" -h "$HOOK" issue "$PRIMARY" "${SANS[@]}" 2>&1)
+	ISSUE_EXIT=$?
+	set -e
+	echo "$ISSUE_OUTPUT"
+
+	# uacme exits non-zero both on a real failure AND on its normal
+	# "not due for renewal yet" skip - the exit code alone cannot tell
+	# these apart. The certificate file itself is the actual source of
+	# truth for whether anything changed; a non-zero exit is only
+	# treated as fatal here if the file did NOT change AND uacme's own
+	# output does not look like a deliberate skip.
+	AFTER_HASH=""
+	[[ -f "$CERT_FILE" ]] && AFTER_HASH="$(sha256sum "$CERT_FILE" | awk '{print $1}')"
+
+	if [[ -n "$AFTER_HASH" && "$AFTER_HASH" != "$BEFORE_HASH" ]]; then
+		echo "[OK] certificate renewed: $PRIMARY"
+		echo "RENEWED=yes"
+	elif [[ "$ISSUE_EXIT" -eq 0 ]] || echo "$ISSUE_OUTPUT" | grep -qi "skipping"; then
+		echo "[OK] certificate still valid, no renewal needed: $PRIMARY"
+		echo "RENEWED=no"
+	else
+		echo "[ERROR] uacme issue failed for $PRIMARY" >&2
+		exit 1
+	fi
+	exit 0
+fi
+
+# --- add: interactive/first-time issuance, with account bootstrap ---
 
 # --- Account bootstrap ---
 if [[ ! -f "$CONFDIR/private/key.pem" ]]; then

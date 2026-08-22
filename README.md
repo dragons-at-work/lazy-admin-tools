@@ -95,6 +95,7 @@ See [`cert/README.md`](cert/README.md) for usage and architecture.
 lazy-admin-tools/
 ├── README.md
 ├── LICENSE
+├── install.sh
 ├── health/
 │   ├── openbsd-health.sh
 │   └── debian-health.sh
@@ -122,6 +123,9 @@ lazy-admin-tools/
 └── cert/
     ├── README.md
     ├── cert-add.sh
+    ├── cert-deploy.sh
+    ├── cert-renew.sh
+    ├── cert-renew-install.sh
     ├── backends/
     │   └── uacme.sh
     └── hooks/
@@ -134,11 +138,44 @@ than duplicating the repository structure per operating system.
 
 ## Installation
 
-Installation depends on the tool family.
+`install.sh` at the repository root installs one or more toolsets and
+sets up their `/usr/local/sbin` symlinks in one step:
+
+``` sh
+sudo ./install.sh --all
+```
+
+or individually:
+
+``` sh
+sudo ./install.sh mail
+sudo ./install.sh cert
+sudo ./install.sh health
+```
+
+Idempotent - safe to re-run after `git pull` to pick up updates. It
+only places files and creates symlinks; it does not run
+`mailserver-init`, `cert-add`, `cert-renew-install`, or anything else
+that touches live configuration - those remain deliberate separate
+steps, documented per toolset below.
+
+Installation layout depends on the tool family, matching what
+`install.sh` does under the hood:
 
 ### Health checks
 
-Install cron-driven health helpers below `/usr/local/libexec`:
+Installed below `/usr/local/libexec`:
+
+``` text
+/usr/local/libexec/lazy-admin-tools/health/
+```
+
+No symlinks are created - health checks are unattended helpers
+normally invoked by cron rather than interactive administrator
+commands. Add them to `/etc/crontab` yourself; see
+[Usage](#health-checks) below.
+
+To install by hand instead of via `install.sh`:
 
 ``` sh
 doas mkdir -p /usr/local/libexec/lazy-admin-tools/health
@@ -149,20 +186,14 @@ doas chmod +x /usr/local/libexec/lazy-admin-tools/health/openbsd-health.sh
 Use the analogous path for `health/debian-health.sh` on Debian hosts,
 using `sudo` instead of `doas`.
 
-`/usr/local/libexec` is intentional: health checks are unattended
-helpers normally invoked by cron rather than interactive administrator
-commands.
-
 ### Mail administration
 
-Keep the mail toolset together below:
+Installed below `/usr/local/lib`, with administrator-facing commands
+symlinked into `/usr/local/sbin`:
 
 ``` text
 /usr/local/lib/lazy-admin-tools/mail/
 ```
-
-Administrator-facing commands can additionally be exposed through
-`/usr/local/sbin` using symlinks.
 
 The mail tools have additional OpenSMTPD/Dovecot prerequisites and
 deployment requirements. Follow
@@ -171,17 +202,11 @@ them on a server.
 
 ### Certificate requests
 
-Keep the certificate toolset together below:
+Installed below `/usr/local/lib`, with administrator-facing commands
+symlinked into `/usr/local/sbin`:
 
 ``` text
 /usr/local/lib/lazy-admin-tools/cert/
-```
-
-Administrator-facing commands can additionally be exposed through
-`/usr/local/sbin` using symlinks, e.g.:
-
-``` sh
-sudo ln -sf /usr/local/lib/lazy-admin-tools/cert/cert-add.sh /usr/local/sbin/cert-add
 ```
 
 The `uacme` backend requires `uacme` itself, a system user it runs as,

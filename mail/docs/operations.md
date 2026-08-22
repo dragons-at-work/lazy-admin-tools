@@ -46,6 +46,36 @@ The mailbox address and credential are written together. The tool is
 designed to avoid leaving only one side updated if the second write
 fails.
 
+## Reset a mailbox password
+
+Administrative reset - root sets a new password without knowing the
+old one. This is not a self-service password change; a mailbox owner
+authenticating with their current password is a separate, not yet
+built tool (`mail-passwd`), which needs its own privileged interface
+since mailbox users are not Unix accounts.
+
+Interactive:
+
+``` bash
+sudo ./mail-mailbox-passwd.sh user@example.org
+```
+
+Non-interactive, e.g. for scripting or migration:
+
+``` bash
+sudo ./mail-mailbox-passwd.sh --hash '$6$rounds=5000$...' user@example.org
+```
+
+Only the credential in `secrets/users` is changed. The mailbox entry,
+its aliases, and everything else in the store are left untouched.
+After a reset, regenerate and deploy as usual so the new hash reaches
+both `dovecot-users` and `smtpd-auth`:
+
+``` bash
+sudo mailserver-validate
+sudo mailserver-deploy
+```
+
 ## Add an alias
 
 Local target:

@@ -51,7 +51,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 	exit 1
 fi
 
-for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-mailhosting.conf; do
+for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-mailhosting.conf; do
 	if [[ ! -f "$GEN/$f" ]]; then
 		echo "[ERROR] $GEN/$f not found - run mailserver-generate first" >&2
 		exit 1

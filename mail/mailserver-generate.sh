@@ -103,6 +103,22 @@ strip_comments "$BASE/secrets/users" > "$OUT/dovecot-users"
 chmod 600 "$OUT/dovecot-users"
 echo "[OK] generated dovecot-users ($(wc -l < "$OUT/dovecot-users") entries)"
 
+# --- smtpd submission auth: same source of truth (secrets/users),
+#     reshaped for OpenSMTPD's table(5) credentials format
+#     ("user password", space-separated) instead of Dovecot's
+#     passwd-file format ("user:password"). Generated independently
+#     from dovecot-users rather than derived from it, so both trace
+#     back to secrets/users directly rather than one generated
+#     artifact depending on another. Mailbox credentials only for
+#     now - relay/service credentials (e.g. for tiamat, typhon) are
+#     a separate future source that a later version of this script
+#     will merge in here, not mailbox users. ---
+strip_comments "$BASE/secrets/users" \
+	| awk -F: 'NF >= 2 { addr=$1; sub(/^[^:]*:/, "", $0); print addr, $0 }' \
+	> "$OUT/smtpd-auth"
+chmod 600 "$OUT/smtpd-auth"
+echo "[OK] generated smtpd-auth ($(wc -l < "$OUT/smtpd-auth") entries)"
+
 # --- accepted domains: canonical + alias domains ---
 {
 	strip_comments "$BASE/domains"

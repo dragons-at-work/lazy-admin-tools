@@ -211,10 +211,27 @@ A domain/key combination must not occur more than once.
 
 ## Generated artifacts
 
+`smtpd-auth` is generated from `secrets/users`, independently of
+`dovecot-users` rather than derived from it - both trace back to
+`secrets/users` directly. It reshapes the same mailbox credentials
+into OpenSMTPD's `table(5)` credentials format (`user password`,
+space-separated) instead of Dovecot's passwd-file format
+(`user:password`), so the same SHA512-Crypt hash authenticates both
+IMAP (Dovecot) and SMTP submission (OpenSMTPD `listen ... auth`)
+without a second password store. Confirmed empirically: OpenSMTPD
+accepts these hashes directly for listener auth (`235 2.0.0
+Authentication succeeded`).
+
+Only mailbox credentials go into `smtpd-auth` in v1. Relay/service
+credentials (e.g. for other hosts relaying through this one) are a
+separate future source; a later version of this script will merge
+them in here without needing to be real mailboxes.
+
 A generation contains:
 
 ``` text
 dovecot-users
+smtpd-auth
 smtpd-domains
 smtpd-local-recipients
 smtpd-forward-recipients
