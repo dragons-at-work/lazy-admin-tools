@@ -110,36 +110,94 @@ sudo ./mail-dkim-create.sh biocodie.de mail
 ```
 
 This only creates the key under `/etc/mail/dkim/<domain>.<selector>.key`
-(owned by `_dkimsign`, the `opensmtpd-filter-dkimsign` system user) and
-prints the DNS TXT record to publish. It does not touch DNS and does
-not wire up the OpenSMTPD filter - both remain manual steps.
+(group-owned by `_rspamd`, mode 0640, so the running rspamd daemon can
+read it) and prints the DNS TXT record to publish. It does not touch
+DNS and does not wire up rspamd's signing configuration - both remain
+manual steps.
 
 The key is long-lived state, like a certificate's private key -
 `mail-dkim-create` refuses to overwrite an existing one without
 `--force`, since a new key invalidates whatever is already published
 in DNS.
 
-**Wiring the filter is currently manual, proven for a single domain
-only.** `filter-dkimsign` takes one key and one selector per filter
-instance; multiple independent domains would need multiple filter
-instances chained on the same listener, and whether OpenSMTPD/
-opensmtpd-filter-dkimsign signs correctly per-domain in that
-configuration (versus e.g. every message getting signed by every
-filter in the chain regardless of its actual domain) has not been
-verified. `mailserver-generate` therefore does not yet generate a
-DKIM filter fragment. Until a second real domain has been proven
-end-to-end, wire the filter by hand:
+**Signing is done by rspamd (sign-only), not `opensmtpd-filter-dkimsign`
+directly - proven for two real domains with independent keys.** An
+earlier approach chaining one `filter-dkimsign` instance per domain on
+the submission listener was tested end-to-end and rejected: OpenSMTPD
+runs every filter in a chain unconditionally, so each message got
+signed by every domain's filter regardless of its actual `From:`
+domain - one correct signature plus one spurious signature for an
+unrelated domain, on every message. `filter-dkimsign` itself also only
+supports one key/selector per filter instance (multiple `-d` values
+only pick among names for the *same* key, not independent keys).
 
-``` text
-filter "dkimsign" proc-exec "filter-dkimsign -d <domain> -s <selector> -k /etc/mail/dkim/<domain>.<selector>.key" user _dkimsign group _dkimsign
+Rspamd's `dkim_signing` module selects the correct domain/key from the
+message's `From:` header itself, so one filter instance handles every
+domain. Setup (once per host, not generated yet):
+
+Install without pulling in Redis/Valkey (not needed - the module
+supports `use_redis = false`):
+
+``` bash
+sudo apt install --no-install-recommends rspamd opensmtpd-filter-rspamd
 ```
 
-attached only to the port 587 (submission) listeners, not port 25 -
-this signs mail entering via authenticated submission, not mail
-merely relayed through the host. Proven end-to-end against a real
-external DKIM checker: `dkim=pass`, `header.d` matching the `From:`
-domain, delivered through the existing relay path without the
-signature breaking.
+`local.d/dkim_signing.conf`:
+
+``` text
+use_domain = "header";
+use_redis = false;
+sign_authenticated = true;
+sign_local = true;
+
+domain {
+    biocodie.de {
+        selector = "mail";
+        path = "/etc/mail/dkim/biocodie.de.mail.key";
+    }
+    frederike-amalia-sinclair.de {
+        selector = "mail";
+        path = "/etc/mail/dkim/frederike-amalia-sinclair.de.mail.key";
+    }
+}
+```
+
+`local.d/settings.conf` (sign-only rule, applied via `-settings-id`,
+per the `opensmtpd-filter-rspamd` project's own documented usage):
+
+``` text
+outgoing {
+    id = "outgoing";
+    apply {
+        groups_enabled = ["dkim"];
+        actions {
+            reject = 100.0;
+            greylist = 100.0;
+            "add header" = 100.0;
+        }
+    }
+}
+```
+
+`opensmtpd-filter-rspamd` speaks rspamd's native HTTP protocol against
+the `normal` worker (port 11333 by default) - it does not use the
+Milter protocol, so the `rspamd_proxy` worker's documented "self-scan"
+mode (which serves Milter on port 11332) does not apply here and the
+`normal` worker must stay enabled.
+
+In `smtpd-mailtls.conf`, attached only to the port 587 (submission)
+listeners, not port 25 - this signs mail entering via authenticated
+submission, not mail merely relayed through the host:
+
+``` text
+filter "rspamd_outgoing" proc-exec "filter-rspamd -settings-id outgoing"
+```
+
+Proven end-to-end with two independent domains and independent keys:
+each domain's outgoing mail carries exactly one `DKIM-Signature`
+header with the correct `d=` value for its own `From:` domain, no
+spurious signature for the other domain, verified against a real
+mailbox's raw headers.
 
 ## Validate the store
 

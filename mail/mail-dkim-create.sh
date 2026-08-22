@@ -3,15 +3,27 @@
 # Usage: mail-dkim-create <domain> [selector]
 #        mail-dkim-create --force <domain> [selector]
 #
-# Generates a persistent DKIM key under /etc/mail/dkim/, owned by the
-# opensmtpd-filter-dkimsign system user (_dkimsign), and prints the
-# DNS TXT record to publish. The key is treated as long-lived state,
-# like a certificate's private key - never regenerated automatically.
-# Regenerating it without updating DNS would break signing (mismatch
-# with the already-published public key), so this refuses to
-# overwrite an existing key unless --force is given, and --force still
-# does not touch DNS for you - update the TXT record yourself before
-# or as part of the same change.
+# Generates a persistent DKIM key under /etc/mail/dkim/, group-owned by
+# _rspamd (the rspamd system group) so the running rspamd daemon can
+# read it, and prints the DNS TXT record to publish. The key is
+# treated as long-lived state, like a certificate's private key -
+# never regenerated automatically. Regenerating it without updating
+# DNS would break signing (mismatch with the already-published public
+# key), so this refuses to overwrite an existing key unless --force
+# is given, and --force still does not touch DNS for you - update the
+# TXT record yourself before or as part of the same change.
+#
+# Rspamd (sign-only, via opensmtpd-filter-rspamd) is the proven signer
+# for multiple domains with independent keys. An earlier approach using
+# opensmtpd-filter-dkimsign directly (one filter instance per domain,
+# chained on the submission listener) was tested end-to-end with two
+# real domains and rejected: OpenSMTPD runs every filter in a chain
+# unconditionally, so every message got signed by every domain's
+# filter regardless of its actual From: domain - each mail ended up
+# with one correct signature and one spurious signature for an
+# unrelated domain. Rspamd's dkim_signing module correctly selects the
+# matching domain/key from the message's From: header, verified with a
+# real message per domain showing exactly one correct signature each.
 #
 # selector defaults to the value of dkim_selector in config (global,
 # or per-domain override via domain-overrides), following the same
@@ -19,13 +31,10 @@
 # selector must be given explicitly.
 #
 # This only creates the key and tells you what to publish - it does
-# not touch smtpd.conf, does not install opensmtpd-filter-dkimsign,
-# and does not wire up the filter. That wiring is currently a manual,
-# proven-by-hand step (see docs/operations.md) - mailserver-generate
-# does not yet generate the DKIM filter fragment for multiple domains,
-# since opensmtpd-filter-dkimsign's behavior with more than one
-# domain/key/selector chained on one listener has not been verified
-# end-to-end yet (only a single domain has been proven in production).
+# not touch DNS, does not install rspamd/opensmtpd-filter-rspamd, and
+# does not wire up dkim_signing.conf's domain{} block. That remains a
+# manual step for now (see docs/operations.md); mailserver-generate
+# does not yet generate the rspamd DKIM fragment from the store.
 
 set -euo pipefail
 
@@ -35,7 +44,7 @@ export PATH
 # --- Configuration ---
 BASE=/etc/mailserver
 DKIM_DIR=/etc/mail/dkim
-DKIM_USER=_dkimsign
+DKIM_GROUP=_rspamd
 KEY_BITS=2048
 # --- End configuration ---
 
@@ -102,8 +111,8 @@ if ! [[ "$SELECTOR" =~ $SELECTOR_RE_BASH ]]; then
 	exit 1
 fi
 
-if ! id "$DKIM_USER" >/dev/null 2>&1; then
-	echo "[ERROR] system user not found: $DKIM_USER (install opensmtpd-filter-dkimsign first)" >&2
+if ! getent group "$DKIM_GROUP" >/dev/null 2>&1; then
+	echo "[ERROR] system group not found: $DKIM_GROUP (install rspamd first)" >&2
 	exit 1
 fi
 
@@ -132,8 +141,8 @@ if ! openssl genrsa -out "$TMP_KEY" "$KEY_BITS" >/dev/null 2>&1; then
 	exit 1
 fi
 
-chown "$DKIM_USER:$DKIM_USER" "$TMP_KEY"
-chmod 600 "$TMP_KEY"
+chown "root:$DKIM_GROUP" "$TMP_KEY"
+chmod 640 "$TMP_KEY"
 mv "$TMP_KEY" "$KEY_FILE"
 trap - EXIT
 
@@ -143,14 +152,14 @@ if [[ -z "$PUBKEY_B64" ]]; then
 	exit 1
 fi
 
-echo "[OK] DKIM key created: $KEY_FILE ($DKIM_USER:$DKIM_USER, 0600)"
+echo "[OK] DKIM key created: $KEY_FILE (root:$DKIM_GROUP, 0640)"
 echo ""
 echo "Publish this DNS TXT record:"
 echo ""
 echo "${SELECTOR}._domainkey.${DOMAIN}.  TXT  \"v=DKIM1; k=rsa; p=${PUBKEY_B64}\""
 echo ""
-echo "This tool does not publish DNS or wire up the OpenSMTPD filter -"
-echo "both remain manual steps until the multi-domain filter behavior"
-echo "has been verified end-to-end. See docs/operations.md."
+echo "This tool does not publish DNS or wire up rspamd's dkim_signing"
+echo "domain{} block for this key - that remains a manual step for now."
+echo "See docs/operations.md."
 echo ""
 echo "-- lazy-admin-tools - dragons@work"
