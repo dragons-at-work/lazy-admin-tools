@@ -166,6 +166,7 @@ autoconfig_backend = none
 vmail_base = /var/vmail
 smtpd_conf_path = /etc/smtpd.conf
 dovecot_users_path = /etc/dovecot/users
+dovecot_sni_conf_path = /etc/dovecot/conf.d/90-mailserver-sni.conf
 dovecot_lmtp_socket = /run/dovecot/lmtp
 ```
 
@@ -307,6 +308,7 @@ virtual-local
 virtual-forward
 smtpd-mailhosting.conf
 smtpd-mailtls.conf
+dovecot-ssl-sni.conf
 rspamd-dkim_signing.conf
 nginx-autoconfig.conf
 autoconfig/<domain>/mail/config-v1.1.xml (one per canonical domain)
