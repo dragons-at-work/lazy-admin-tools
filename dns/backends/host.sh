@@ -43,10 +43,22 @@ if [[ "$SUBCOMMAND" == ns ]]; then
 	fi
 	domain="$1"
 	while [[ "$domain" == *.* ]]; do
-		result="$(host -t NS "$domain" 2>/dev/null | awk '/name server/ {print $NF}' | sed 's/\.$//')"
-		if [[ -n "$result" ]]; then
-			echo "$result"
-			exit 0
+		set +e
+		output="$(host -t NS "$domain" 2>&1)"
+		exit_code=$?
+		set -e
+		if [[ "$exit_code" -eq 0 ]]; then
+			result="$(echo "$output" | awk '/name server/ {print $NF}' | sed 's/\.$//')"
+			if [[ -n "$result" ]]; then
+				echo "$result"
+				exit 0
+			fi
+			# exit 0 but nothing parsed - keep walking up the labels
+		elif echo "$output" | grep -qiE "not found|does not exist|no NS record"; then
+			: # no NS at this label (NXDOMAIN/NODATA) - normal, keep walking up
+		else
+			echo "[ERROR] NS query failed for $domain: $output" >&2
+			exit 1
 		fi
 		domain="${domain#*.}"
 	done

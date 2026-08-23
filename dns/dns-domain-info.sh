@@ -72,7 +72,10 @@ RECORDS=(
 echo "=== $DOMAIN (backend: $BACKEND) ==="
 echo ""
 
-NS_LIST="$("$BACKEND_BIN" ns "$DOMAIN" || true)"
+if ! NS_LIST="$("$BACKEND_BIN" ns "$DOMAIN")"; then
+	echo "[ERROR] failed to determine authoritative nameservers for $DOMAIN" >&2
+	exit 1
+fi
 if [[ -z "$NS_LIST" ]]; then
 	echo "[WARN] no authoritative nameservers found for $DOMAIN"
 	echo "-- lazy-admin-tools - dragons@work"
@@ -89,7 +92,7 @@ for entry in "${RECORDS[@]}"; do
 	name="${name_template//\{d\}/$DOMAIN}"
 
 	echo "-- $name $type --"
-	declare -A seen=()
+	declare -A group=()   # canon -> "ns1 ns2 ..."
 	FAILED=no
 	while IFS= read -r ns; do
 		[[ -z "$ns" ]] && continue
@@ -99,24 +102,34 @@ for entry in "${RECORDS[@]}"; do
 			continue
 		fi
 		if [[ -z "$result" ]]; then
-			echo "  $ns: (kein Record)"
 			canon="__EMPTY__"
 		else
-			echo "$result" | while IFS= read -r line; do
-				echo "  $ns: $line"
-			done
 			# Record-Reihenfolge ist nicht semantisch - vor dem
 			# Vergleich sortieren, sonst gilt dieselbe Menge in
 			# anderer Reihenfolge faelschlich als abweichend.
 			canon="$(echo "$result" | sort -u)"
 		fi
-		seen["$canon"]=1
+		group["$canon"]="${group[$canon]:-}$ns "
 	done <<< "$NS_LIST"
 
-	if [[ "$FAILED" == no && "${#seen[@]}" -gt 1 ]]; then
+	# Gleiche Antwort einmal zeigen, mit allen NS die sie geliefert
+	# haben - statt sie pro NS zu wiederholen.
+	for canon in "${!group[@]}"; do
+		nslist="${group[$canon]% }"
+		echo "  ${nslist// /, }:"
+		if [[ "$canon" == __EMPTY__ ]]; then
+			echo "    (kein Record)"
+		else
+			echo "$canon" | while IFS= read -r line; do
+				echo "    $line"
+			done
+		fi
+	done
+
+	if [[ "$FAILED" == no && "${#group[@]}" -gt 1 ]]; then
 		echo "  [WARN] Nameserver antworten unterschiedlich"
 	fi
-	unset seen
+	unset group
 	echo ""
 done
 
