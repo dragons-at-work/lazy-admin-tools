@@ -64,7 +64,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 	exit 1
 fi
 
-for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-senders smtpd-mailhosting.conf smtpd-mailtls.conf rspamd-dkim_signing.conf; do
+for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-senders smtpd-mailhosting.conf smtpd-mailtls.conf rspamd-dkim_signing.conf nginx-autoconfig.conf; do
 	if [[ ! -f "$GEN/$f" ]]; then
 		echo "[ERROR] $GEN/$f not found - run mailserver-generate first" >&2
 		exit 1
@@ -180,6 +180,41 @@ LUAEOF
 	fi
 else
 	echo "[INFO] rspamadm not found - skipping rspamd-dkim_signing.conf UCL check (not an error: this host may not use dkim_backend = rspamd)"
+fi
+
+# --- nginx: validate the generated autoconfig fragment as real nginx
+#     syntax, using a minimal throwaway wrapper config that only
+#     includes the fragment - unlike rspamd's configtest, nginx's -c
+#     flag genuinely controls what gets read, so this is a real check,
+#     not just a standalone parse. Never touches the real
+#     /etc/nginx. Skipped gracefully (not an error) on hosts without
+#     nginx installed - autoconfig_backend can be "none" there, in
+#     which case the generated file is just a disabled placeholder.
+#     Note: this check actually binds no sockets (nginx -t only tests
+#     config, does not start), but on a host with IPv6 disabled at the
+#     kernel level "listen [::]" can still fail this test with a
+#     socket-family error unrelated to syntax - not seen as an issue
+#     on real mail hosts, which already need IPv6 for MX/SPF anyway. ---
+if command -v nginx >/dev/null 2>&1; then
+	TMP_NGINX_CONF=$(mktemp /tmp/mailserver-validate-nginx.XXXXXX.conf)
+	trap 'rm -f "$TMP_NGINX_CONF"; cleanup' EXIT
+
+	cat > "$TMP_NGINX_CONF" << EOF
+events {}
+http {
+	include $GEN/nginx-autoconfig.conf;
+}
+EOF
+
+	if nginx -t -c "$TMP_NGINX_CONF" >/dev/null 2>&1; then
+		echo "[OK] generated nginx-autoconfig.conf is valid nginx syntax ($GEN)"
+	else
+		echo "[ERROR] generated nginx-autoconfig.conf has invalid nginx syntax ($GEN)" >&2
+		nginx -t -c "$TMP_NGINX_CONF" >&2 || true
+		ERRORS=$((ERRORS + 1))
+	fi
+else
+	echo "[INFO] nginx not found - skipping nginx-autoconfig.conf syntax check (not an error: this host may not use autoconfig_backend = nginx)"
 fi
 
 echo ""

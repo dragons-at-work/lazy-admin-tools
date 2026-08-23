@@ -113,6 +113,14 @@ lazy-admin-tools/
 │   ├── mail-alias-add.sh
 │   ├── mail-alias-del.sh
 │   ├── mailserver-generate.sh
+│   ├── lib/
+│   │   └── mailserver-generate/
+│   │       ├── common.sh
+│   │       ├── store.sh
+│   │       ├── hosting.sh
+│   │       ├── tls.sh
+│   │       ├── dkim.sh
+│   │       └── autoconfig.sh
 │   ├── mailserver-validate.sh
 │   ├── mailserver-validate-generated.sh
 │   ├── mailserver-deploy.sh

@@ -159,8 +159,10 @@ The current v1 key set is:
 imap_hostname_pattern = imap.%domain%
 smtp_hostname_pattern = smtp.%domain%
 mx_hostname_pattern = mail.%domain%
+autoconfig_hostname_pattern = autoconfig.%domain%
 dkim_selector = mail
 dkim_backend = none
+autoconfig_backend = none
 vmail_base = /var/vmail
 smtpd_conf_path = /etc/smtpd.conf
 dovecot_users_path = /etc/dovecot/users
@@ -170,6 +172,12 @@ dovecot_lmtp_socket = /run/dovecot/lmtp
 `dkim_backend` is `none` (or unset) by default - DKIM signing is
 opt-in. The only other supported value is `rspamd`; any other value
 fails generation. See [`operations.md`](operations.md) for setup.
+
+`autoconfig_backend` is `none` (or unset) by default - Thunderbird/
+client autoconfiguration is opt-in. The only other supported value is
+`nginx`; any other value fails generation. `autoconfig_hostname_pattern`
+is only required when it is enabled. See [`operations.md`](operations.md)
+for setup.
 
 ### Hostname patterns
 
@@ -275,6 +283,17 @@ local mailbox - not signed with that domain's DKIM key (rspamd
 correctly declines when the authenticated user doesn't match), but
 still accepted and relayed unsigned.
 
+`nginx-autoconfig.conf` and the per-domain `autoconfig/<domain>/mail/
+config-v1.1.xml` files are opt-in via the global `autoconfig_backend`
+config key (`nginx` or unset/`none`). When enabled, generation fails
+closed the same way as the TLS fragment: every canonical domain's
+certificate must also cover its autoconfig hostname (checked in the
+same SAN loop as mx/smtp/imap) - a missing SAN aborts the entire run.
+Uses the domain's existing mail certificate rather than a separate
+one; no additional certificate lifecycle just for autoconfig. See
+[`operations.md`](operations.md) for the full setup, including the
+real Thunderbird test this was proven against.
+
 A generation contains:
 
 ``` text
@@ -289,6 +308,8 @@ virtual-forward
 smtpd-mailhosting.conf
 smtpd-mailtls.conf
 rspamd-dkim_signing.conf
+nginx-autoconfig.conf
+autoconfig/<domain>/mail/config-v1.1.xml (one per canonical domain)
 ```
 
 These files are regenerated from the store and must not be edited as

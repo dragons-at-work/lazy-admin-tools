@@ -82,18 +82,32 @@ chmod 700 "$GENERATIONS"
 # set -u, using TOTAL_STEPS before it is assigned is a hard failure,
 # not just a cosmetic gap.
 DKIM_BACKEND=$(read_config dkim_backend)
+AUTOCONFIG_BACKEND=$(read_config autoconfig_backend)
 
+BASE_STEPS=11
+EXTRA_STEPS=0
+[[ "$DKIM_BACKEND" == rspamd ]] && EXTRA_STEPS=$((EXTRA_STEPS + 1))
+[[ "$AUTOCONFIG_BACKEND" == nginx ]] && EXTRA_STEPS=$((EXTRA_STEPS + 1))
+TOTAL_STEPS=$((BASE_STEPS + EXTRA_STEPS))
+
+# Optional install steps (rspamd, then nginx) are numbered
+# sequentially starting right after "install dovecot-users" (step 8),
+# in the order they actually run - only the ones that are enabled
+# consume a step number.
+NEXT_STEP=9
+RSPAMD_INSTALL_STEP=0
+NGINX_INSTALL_STEP=0
 if [[ "$DKIM_BACKEND" == rspamd ]]; then
-	TOTAL_STEPS=12
-	RELOAD_STEP=10
-	LIVE_STEP=11
-	DONE_STEP=12
-else
-	TOTAL_STEPS=11
-	RELOAD_STEP=9
-	LIVE_STEP=10
-	DONE_STEP=11
+	RSPAMD_INSTALL_STEP=$NEXT_STEP
+	NEXT_STEP=$((NEXT_STEP + 1))
 fi
+if [[ "$AUTOCONFIG_BACKEND" == nginx ]]; then
+	NGINX_INSTALL_STEP=$NEXT_STEP
+	NEXT_STEP=$((NEXT_STEP + 1))
+fi
+RELOAD_STEP=$NEXT_STEP
+LIVE_STEP=$((NEXT_STEP + 1))
+DONE_STEP=$((NEXT_STEP + 2))
 
 echo "=== Step 1/$TOTAL_STEPS: mailserver-validate ==="
 if ! "$SCRIPT_DIR/mailserver-validate.sh"; then
@@ -181,6 +195,19 @@ if [[ "$DKIM_BACKEND" == rspamd ]]; then
 	echo "[OK] current production rspamd configuration validates"
 fi
 
+if [[ "$AUTOCONFIG_BACKEND" == nginx ]]; then
+	if ! command -v nginx >/dev/null 2>&1; then
+		echo "[ERROR] autoconfig_backend = nginx but nginx not found - install nginx first" >&2
+		exit 1
+	fi
+	if ! nginx -t > /dev/null 2>&1; then
+		echo "[ERROR] current production nginx configuration is already invalid - aborting before deploy" >&2
+		echo "[ERROR] fix the existing production nginx configuration first" >&2
+		exit 1
+	fi
+	echo "[OK] current production nginx configuration validates"
+fi
+
 echo ""
 echo "=== Step 3/$TOTAL_STEPS: build new generation ==="
 GENERATION_ID="$(date -u +%Y-%m-%dT%H%M%SZ)"
@@ -248,6 +275,32 @@ rollback() {
 			echo "[OK] removed /etc/rspamd/local.d/dkim_signing.conf (none existed before this run)" >&2
 		fi
 		systemctl restart rspamd 2>/dev/null || true
+	fi
+	if [[ "${NGINX_AUTOCONFIG_INSTALLED:-no}" == yes ]]; then
+		NGINX_AC_TARGET=/etc/nginx/sites-available/lazy-admin-tools-autoconfig.conf
+		NGINX_AC_ENABLED=/etc/nginx/sites-enabled/lazy-admin-tools-autoconfig.conf
+		if [[ -n "${NGINX_AUTOCONFIG_BACKUP:-}" && -f "$NGINX_AUTOCONFIG_BACKUP" ]]; then
+			cp "$NGINX_AUTOCONFIG_BACKUP" "$NGINX_AC_TARGET"
+			echo "[OK] rolled back $NGINX_AC_TARGET" >&2
+		else
+			rm -f "$NGINX_AC_TARGET" "$NGINX_AC_ENABLED"
+			echo "[OK] removed $NGINX_AC_TARGET (none existed before this run)" >&2
+		fi
+		if [[ -n "${NGINX_XML_BACKUP_DIR:-}" && -d "$NGINX_XML_BACKUP_DIR" ]]; then
+			for domain_backup in "$NGINX_XML_BACKUP_DIR"/*/; do
+				[[ -d "$domain_backup" ]] || continue
+				domain="$(basename "$domain_backup")"
+				mkdir -p "/var/www/autoconfig/$domain/mail"
+				cp "$domain_backup/config-v1.1.xml" "/var/www/autoconfig/$domain/mail/config-v1.1.xml"
+			done
+			echo "[OK] rolled back autoconfig XML files that had a prior version" >&2
+		fi
+		# Note: an XML file just installed this run for a brand-new
+		# domain (no prior version to restore) is left in place rather
+		# than removed - it becomes inert once the nginx vhost fragment
+		# above is reverted (nothing serves it any more), so leaving it
+		# is a harmless simplification rather than a real gap.
+		systemctl reload nginx 2>/dev/null || true
 	fi
 	systemctl restart dovecot 2>/dev/null || true
 	systemctl restart opensmtpd 2>/dev/null || true
@@ -355,7 +408,7 @@ RSPAMD_DKIM_BACKUP=""
 
 if [[ "$DKIM_BACKEND" == rspamd ]]; then
 	echo ""
-	echo "=== Step 9/$TOTAL_STEPS: install rspamd DKIM config ==="
+	echo "=== Step $RSPAMD_INSTALL_STEP/$TOTAL_STEPS: install rspamd DKIM config ==="
 
 	RSPAMD_DKIM_TARGET=/etc/rspamd/local.d/dkim_signing.conf
 
@@ -377,6 +430,72 @@ if [[ "$DKIM_BACKEND" == rspamd ]]; then
 		exit 1
 	fi
 	echo "[OK] installed $RSPAMD_DKIM_TARGET, production rspamd configuration validates"
+fi
+
+# --- Optional: autoconfig (nginx), only when autoconfig_backend =
+#     nginx. Same care as rspamd above: installed and validated
+#     BEFORE any service restart, backed up, and rolled back as a
+#     whole on any failure. Two kinds of files are installed: the
+#     per-domain static XML files (never validated by nginx -t, just
+#     copied - a malformed XML would only affect an autoconfig client
+#     lookup, not the running mail server) and the nginx vhost
+#     fragment itself (validated against the real, running nginx
+#     config, which - unlike rspamd's configtest - actually respects
+#     the file being replaced, since there is no separate compiled-in
+#     path nginx substitutes underneath it). ---
+NGINX_AUTOCONFIG_INSTALLED=no
+NGINX_AUTOCONFIG_BACKUP=""
+NGINX_XML_BACKUP_DIR=""
+
+if [[ "$AUTOCONFIG_BACKEND" == nginx ]]; then
+	echo ""
+	echo "=== Step $NGINX_INSTALL_STEP/$TOTAL_STEPS: install autoconfig (nginx) ==="
+
+	NGINX_AUTOCONFIG_TARGET=/etc/nginx/sites-available/lazy-admin-tools-autoconfig.conf
+	NGINX_AUTOCONFIG_ENABLED=/etc/nginx/sites-enabled/lazy-admin-tools-autoconfig.conf
+
+	if [[ -f "$NGINX_AUTOCONFIG_TARGET" ]]; then
+		NGINX_AUTOCONFIG_BACKUP="$BACKUP_GENERATION/nginx-autoconfig.conf"
+		cp -p "$NGINX_AUTOCONFIG_TARGET" "$NGINX_AUTOCONFIG_BACKUP"
+		echo "[OK] nginx-autoconfig.conf backed up to $NGINX_AUTOCONFIG_BACKUP"
+	fi
+
+	# Back up any existing XML files this run is about to overwrite,
+	# domain by domain, so a rollback can restore exactly what was
+	# there before rather than just deleting everything.
+	NGINX_XML_BACKUP_DIR="$BACKUP_GENERATION/autoconfig"
+	mkdir -p "$NGINX_XML_BACKUP_DIR"
+	for domain_dir in "$NEW_GENERATION"/autoconfig/*/; do
+		[[ -d "$domain_dir" ]] || continue
+		domain="$(basename "$domain_dir")"
+		existing_xml="/var/www/autoconfig/$domain/mail/config-v1.1.xml"
+		if [[ -f "$existing_xml" ]]; then
+			mkdir -p "$NGINX_XML_BACKUP_DIR/$domain"
+			cp -p "$existing_xml" "$NGINX_XML_BACKUP_DIR/$domain/config-v1.1.xml"
+		fi
+	done
+
+	for domain_dir in "$NEW_GENERATION"/autoconfig/*/; do
+		[[ -d "$domain_dir" ]] || continue
+		domain="$(basename "$domain_dir")"
+		mkdir -p "/var/www/autoconfig/$domain/mail"
+		cp "$domain_dir/mail/config-v1.1.xml" "/var/www/autoconfig/$domain/mail/config-v1.1.xml"
+		chmod 644 "/var/www/autoconfig/$domain/mail/config-v1.1.xml"
+	done
+
+	TMP_NGINX_AUTOCONFIG=$(mktemp "$(dirname "$NGINX_AUTOCONFIG_TARGET")/.autoconfig.XXXXXX")
+	cp "$NEW_GENERATION/nginx-autoconfig.conf" "$TMP_NGINX_AUTOCONFIG"
+	chmod 644 "$TMP_NGINX_AUTOCONFIG"
+	mv "$TMP_NGINX_AUTOCONFIG" "$NGINX_AUTOCONFIG_TARGET"
+	ln -sf "$NGINX_AUTOCONFIG_TARGET" "$NGINX_AUTOCONFIG_ENABLED"
+	NGINX_AUTOCONFIG_INSTALLED=yes
+
+	if ! nginx -t > /dev/null 2>&1; then
+		echo "[ERROR] production nginx configuration does not validate with the new autoconfig fragment" >&2
+		rollback
+		exit 1
+	fi
+	echo "[OK] installed $NGINX_AUTOCONFIG_TARGET, production nginx configuration validates"
 fi
 
 echo ""
@@ -404,6 +523,17 @@ if ! systemctl restart opensmtpd; then
 	exit 1
 fi
 echo "[OK] opensmtpd restarted"
+
+if [[ "$NGINX_AUTOCONFIG_INSTALLED" == yes ]]; then
+	# reload, not restart - nginx may be serving other, unrelated
+	# sites on this host; a reload picks up the new autoconfig vhost
+	# without dropping existing connections to anything else.
+	if ! systemctl reload nginx; then
+		rollback
+		exit 1
+	fi
+	echo "[OK] nginx reloaded"
+fi
 
 echo ""
 echo "=== Step $LIVE_STEP/$TOTAL_STEPS: live verification ==="

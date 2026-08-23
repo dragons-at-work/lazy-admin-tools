@@ -99,6 +99,9 @@ install_mail() {
 	cp "$SCRIPT_DIR"/mail/*.sh "$dest/"
 	cp "$SCRIPT_DIR"/mail/README.md "$dest/" 2>/dev/null || true
 	cp "$SCRIPT_DIR"/mail/docs/*.md "$dest/docs/" 2>/dev/null || true
+	if [[ -d "$SCRIPT_DIR/mail/lib" ]]; then
+		cp -r "$SCRIPT_DIR/mail/lib" "$dest/"
+	fi
 	chmod +x "$dest"/*.sh
 	echo "[OK] installed mail/ -> $dest"
 

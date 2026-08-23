@@ -14,7 +14,7 @@ export PATH
 
 # --- Configuration ---
 BASE=/etc/mailserver
-KNOWN_CONFIG_KEYS="imap_hostname_pattern smtp_hostname_pattern mx_hostname_pattern dkim_selector dkim_backend vmail_base smtpd_conf_path dovecot_users_path dovecot_lmtp_socket"
+KNOWN_CONFIG_KEYS="imap_hostname_pattern smtp_hostname_pattern mx_hostname_pattern autoconfig_hostname_pattern dkim_selector dkim_backend autoconfig_backend vmail_base smtpd_conf_path dovecot_users_path dovecot_lmtp_socket"
 # --- End configuration ---
 
 DOMAIN_RE='^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'

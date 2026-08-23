@@ -282,6 +282,76 @@ into the generated table: this is stricter than necessary for the
 common case, and there is no real path in this setup that needs an
 authenticated submission client to send with a null sender.
 
+## Client autoconfiguration (Thunderbird/Outlook)
+
+Generated automatically as `nginx-autoconfig.conf` and one
+`config-v1.1.xml` per canonical domain, wired to nginx once
+`autoconfig_backend = nginx` is set - no manual step for routine
+changes (a new domain, a certificate renewal).
+
+**Proven manually on two real domains before automating, on purpose:**
+Thunderbird is picky about the exact XML structure, authentication
+type, and socket type - a real client test is worth more than
+generating it blind. `biocodie.de`'s and
+`frederike-amalia-sinclair.de`'s autoconfig were built by hand first
+(own `autoconfig.<domain>` certificate, own nginx vhost, hand-written
+XML) and confirmed with a real Thunderbird client: "Settings found at
+your provider" instead of "found by guessing typical server names",
+followed by a successful login. Only once that worked for real was
+the mechanism generalized into the generator.
+
+**One certificate per domain, not two.** The first working version
+used a separate `autoconfig.<domain>` certificate. This was
+consolidated into the domain's existing mail certificate (now covering
+mx/smtp/imap/autoconfig as SANs) after the manual proof, since a
+domain that promises Thunderbird autoconfig should own its autoconfig
+hostname as part of one certificate lifecycle - one `cert-add`, one
+`cert-deploy`, one renewal, instead of a second independent ACME
+object just for this. The old standalone `autoconfig.biocodie.de`
+certificate was removed with `cert-del` once the consolidated
+certificate was deployed and confirmed working.
+
+Setup, once per host:
+
+``` bash
+sudo apt install --no-install-recommends nginx
+```
+
+(nginx itself, and its use for the ACME http-01 challenge webroot, is
+already covered in `cert/README.md` - the same nginx installation is
+reused here, not a second one.)
+
+Enable generation with two config keys:
+
+``` bash
+sudo tee -a /etc/mailserver/config << 'EOF'
+autoconfig_hostname_pattern = autoconfig.%domain%
+autoconfig_backend = nginx
+EOF
+sudo mailserver-validate
+sudo mailserver-deploy
+```
+
+For each canonical domain, generation fails closed if that domain's
+certificate does not also cover its autoconfig hostname as a SAN -
+reissue with all four names together:
+
+``` bash
+sudo cert-add mail.<domain> imap.<domain> smtp.<domain> autoconfig.<domain>
+sudo cert-deploy mail.<domain> dovecot opensmtpd nginx
+```
+
+`autoconfig.<domain>` needs its own DNS A/AAAA record pointing at this
+host - it is a separate hostname from `mail.<domain>`, just covered by
+the same certificate.
+
+`mailserver-deploy` installs the generated nginx vhost fragment to
+`/etc/nginx/sites-available/lazy-admin-tools-autoconfig.conf`
+(symlinked into `sites-enabled`) and each domain's XML to
+`/var/www/autoconfig/<domain>/mail/config-v1.1.xml`, validating against
+the real, running nginx configuration before reloading - with backup
+and rollback matching the rspamd DKIM config handling.
+
 ## Validate the store
 
 Run after administrative changes:

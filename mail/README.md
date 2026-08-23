@@ -31,6 +31,9 @@ Dovecot credentials.
 -   `mail-alias-add.sh` / `mail-alias-del.sh` --- manage mail aliases
 -   `mailserver-validate.sh` --- validate the declarative store
 -   `mailserver-generate.sh` --- generate OpenSMTPD/Dovecot artifacts
+    (a thin orchestrator; the actual logic per concern - store,
+    hosting, TLS, DKIM, autoconfig - lives under
+    `lib/mailserver-generate/`, sourced in sequence)
 -   `mailserver-validate-generated.sh` --- validate generated artifacts
     with the target programs
 -   `mailserver-deploy.sh` --- build, validate, promote, deploy, verify,
