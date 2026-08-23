@@ -89,6 +89,19 @@ documentation.
 
 See [`cert/README.md`](cert/README.md) for usage and architecture.
 
+### DNS lookups
+
+-   Functional v1, single frontend command (`dns-domain-info`)
+-   `host` backend implemented and tested against real authoritative
+    nameservers on Debian 13
+-   `drill` backend (OpenBSD/ldns) is a planned candidate, not built
+    yet - selecting it explicitly fails clearly rather than silently
+    falling back
+-   Information tool only: shows the authoritative DNS state, does not
+    judge correctness and never changes DNS
+
+See [`dns/README.md`](dns/README.md) for usage and architecture.
+
 ## Repository structure
 
 ``` text
@@ -129,17 +142,22 @@ lazy-admin-tools/
 │       ├── configuration.md
 │       ├── installation.md
 │       └── operations.md
-└── cert/
+├── cert/
+│   ├── README.md
+│   ├── cert-add.sh
+│   ├── cert-deploy.sh
+│   ├── cert-renew.sh
+│   ├── cert-renew-install.sh
+│   ├── cert-del.sh
+│   ├── backends/
+│   │   └── uacme.sh
+│   └── hooks/
+│       └── uacme-http-01.sh
+└── dns/
     ├── README.md
-    ├── cert-add.sh
-    ├── cert-deploy.sh
-    ├── cert-renew.sh
-    ├── cert-renew-install.sh
-    ├── cert-del.sh
-    ├── backends/
-    │   └── uacme.sh
-    └── hooks/
-        └── uacme-http-01.sh
+    ├── dns-domain-info.sh
+    └── backends/
+        └── host.sh
 ```
 
 The repository is grouped by function first, platform second.
@@ -160,6 +178,7 @@ or individually:
 ``` sh
 sudo ./install.sh mail
 sudo ./install.sh cert
+sudo ./install.sh dns
 sudo ./install.sh health
 ```
 
@@ -242,6 +261,20 @@ The `uacme` backend requires `uacme` itself, a system user it runs as,
 a challenge directory served on port 80 by the host's webserver, and
 port 80 (IPv4 and IPv6) reachable from the internet. See
 [`cert/README.md`](cert/README.md) for details.
+
+### DNS lookups
+
+Installed below `/usr/local/lib`, with the frontend command symlinked
+into `/usr/local/sbin`:
+
+``` text
+/usr/local/lib/lazy-admin-tools/dns/
+```
+
+The `host` backend requires `host(1)` (part of `bind9-host` /
+`dnsutils` on Debian). No system user, listener, or other setup is
+needed - it only performs read-only DNS queries. See
+[`dns/README.md`](dns/README.md) for details.
 
 ## Usage
 
@@ -357,6 +390,17 @@ The first name is the primary identifier and determines where the
 certificate is stored; any further names are requested as additional
 SANs. See [`cert/README.md`](cert/README.md) for the full usage
 contract, including first-time ACME account setup.
+
+### DNS lookups
+
+``` sh
+dns-domain-info.sh schwarzer-genealogie.de
+```
+
+Prints the domain's authoritative nameservers, then the mail-relevant
+records queried against each of them, grouping nameservers that agree
+and flagging ones that don't. See [`dns/README.md`](dns/README.md) for
+the full record list and backend contract.
 
 ## Documentation
 

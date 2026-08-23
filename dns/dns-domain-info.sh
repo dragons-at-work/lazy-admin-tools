@@ -76,6 +76,7 @@ if ! NS_LIST="$("$BACKEND_BIN" ns "$DOMAIN")"; then
 	echo "[ERROR] failed to determine authoritative nameservers for $DOMAIN" >&2
 	exit 1
 fi
+NS_LIST="$(echo "$NS_LIST" | sort -u)"
 if [[ -z "$NS_LIST" ]]; then
 	echo "[WARN] no authoritative nameservers found for $DOMAIN"
 	echo "-- lazy-admin-tools - dragons@work"
