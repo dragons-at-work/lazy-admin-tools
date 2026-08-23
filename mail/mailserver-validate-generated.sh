@@ -6,8 +6,11 @@
 # smtpd-mailhosting.conf and smtpd-mailtls.conf fragments from DIR
 # (default: /etc/mailserver/generated), and a throwaway dovecot.conf
 # referencing DIR/dovecot-users. Runs "smtpd -n" / "doveconf -n"
-# against them. Never touches the production /etc/smtpd.conf or
-# /etc/dovecot.
+# against them. Also validates rspamd-dkim_signing.conf as standalone
+# UCL via "rspamadm lua" (see the DKIM section below for why
+# "rspamadm configtest" does not actually work for this). Never
+# touches the production /etc/smtpd.conf, /etc/dovecot, or
+# /etc/rspamd.
 #
 # mailserver-deploy calls this with --dir pointing at a staged
 # generation directory, so a new generation can be fully validated
@@ -61,7 +64,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 	exit 1
 fi
 
-for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-mailhosting.conf smtpd-mailtls.conf; do
+for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-senders smtpd-mailhosting.conf smtpd-mailtls.conf rspamd-dkim_signing.conf; do
 	if [[ ! -f "$GEN/$f" ]]; then
 		echo "[ERROR] $GEN/$f not found - run mailserver-generate first" >&2
 		exit 1
@@ -134,10 +137,56 @@ else
 fi
 
 echo ""
-if [[ "$ERRORS" -eq 0 ]]; then
-	echo "[OK] generated artifacts are valid"
+
+# --- Rspamd: validate the generated DKIM fragment as a standalone UCL
+#     document. Deliberately NOT using "rspamadm configtest" against a
+#     copied /etc/rspamd tree - verified experimentally that this does
+#     not work: rspamd's $LOCAL_CONFDIR macro resolves to the real,
+#     compiled-in /etc/rspamd regardless of the -c flag, so a copied
+#     tree's local.d/dkim_signing.conf is silently never read; even
+#     intentionally broken UCL (unbalanced braces, garbage text)
+#     passed "configtest" as "syntax OK" in testing. Using
+#     "rspamadm lua" with the ucl parser library to parse the
+#     generated file directly does not merge it into the dkim_signing
+#     module's context, so this cannot catch every possible semantic
+#     problem (e.g. a domain block rspamd's module schema would
+#     reject) - but it does reliably catch actual UCL syntax errors,
+#     which configtest was proven not to. Never touches the real
+#     /etc/rspamd. Skipped gracefully (not an error) on hosts without
+#     rspamd installed - dkim_backend can be "none" there, in which
+#     case the generated file is just a disabled placeholder anyway. ---
+if command -v rspamadm >/dev/null 2>&1; then
+	TMP_UCL_CHECK=$(mktemp /tmp/mailserver-validate-ucl.XXXXXX.lua)
+	trap 'rm -f "$TMP_UCL_CHECK"; cleanup' EXIT
+
+	cat > "$TMP_UCL_CHECK" << 'LUAEOF'
+local path = arg[1]
+local ucl = require "ucl"
+local parser = ucl.parser()
+local ok, err = parser:parse_file(path)
+if not ok then
+	print("PARSE ERROR: " .. tostring(err))
+	os.exit(1)
+end
+os.exit(0)
+LUAEOF
+
+	if rspamadm lua -a "$GEN/rspamd-dkim_signing.conf" "$TMP_UCL_CHECK" >/dev/null 2>&1; then
+		echo "[OK] generated rspamd-dkim_signing.conf is valid UCL ($GEN)"
+	else
+		echo "[ERROR] generated rspamd-dkim_signing.conf has invalid UCL syntax ($GEN)" >&2
+		rspamadm lua -a "$GEN/rspamd-dkim_signing.conf" "$TMP_UCL_CHECK" >&2 || true
+		ERRORS=$((ERRORS + 1))
+	fi
 else
-	echo "[ERROR] generated artifacts have $ERRORS problem(s)"
+	echo "[INFO] rspamadm not found - skipping rspamd-dkim_signing.conf UCL check (not an error: this host may not use dkim_backend = rspamd)"
+fi
+
+echo ""
+if [[ "$ERRORS" -eq 0 ]]; then
+	echo "[OK] all generated artifacts are valid"
+else
+	echo "[ERROR] generated artifacts have $ERRORS total problem(s)"
 fi
 echo ""
 echo "-- lazy-admin-tools - dragons@work"

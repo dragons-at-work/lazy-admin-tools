@@ -112,8 +112,9 @@ sudo ./mail-dkim-create.sh biocodie.de mail
 This only creates the key under `/etc/mail/dkim/<domain>.<selector>.key`
 (group-owned by `_rspamd`, mode 0640, so the running rspamd daemon can
 read it) and prints the DNS TXT record to publish. It does not touch
-DNS and does not wire up rspamd's signing configuration - both remain
-manual steps.
+DNS or rspamd's own installation - both remain manual steps. Once the
+key exists, `mailserver-generate` picks it up automatically for the
+domain mapping (see below) when `dkim_backend = rspamd`.
 
 The key is long-lived state, like a certificate's private key -
 `mail-dkim-create` refuses to overwrite an existing one without
@@ -133,7 +134,10 @@ only pick among names for the *same* key, not independent keys).
 
 Rspamd's `dkim_signing` module selects the correct domain/key from the
 message's `From:` header itself, so one filter instance handles every
-domain. Setup (once per host, not generated yet):
+domain. Host installation and rspamd's own base config remain a
+one-time manual step (rspamd's config directory is outside this
+store); the per-domain mapping and filter wiring are generated once
+that base setup exists - see below.
 
 Install without pulling in Redis/Valkey (not needed - the module
 supports `use_redis = false`):
@@ -185,19 +189,98 @@ Milter protocol, so the `rspamd_proxy` worker's documented "self-scan"
 mode (which serves Milter on port 11332) does not apply here and the
 `normal` worker must stay enabled.
 
-In `smtpd-mailtls.conf`, attached only to the port 587 (submission)
-listeners, not port 25 - this signs mail entering via authenticated
-submission, not mail merely relayed through the host:
+Once rspamd is installed and configured as above (a one-time, manual
+host setup step - not derived from the store), enable the store-driven
+domain mapping and filter wiring with a single config key:
 
-``` text
-filter "rspamd_outgoing" proc-exec "filter-rspamd -settings-id outgoing"
+``` bash
+sudo tee -a /etc/mailserver/config << 'EOF'
+dkim_backend = rspamd
+EOF
+sudo mailserver-validate
+sudo mailserver-deploy
 ```
+
+From here on, `mailserver-generate` produces `rspamd-dkim_signing.conf`
+(the `domain{}` block from every canonical domain's key) and adds
+`filter "rspamd_outgoing" proc-exec "filter-rspamd -settings-id
+outgoing"` to the port 587 (submission) listeners only in
+`smtpd-mailtls.conf` - never port 25, so only mail entering via
+authenticated submission is signed, not mail merely relayed through
+the host. Generation fails closed the same way as the TLS fragment:
+every canonical domain must already have a key at
+`/etc/mail/dkim/<domain>.<selector>.key` (via `mail-dkim-create`) that
+is actually readable by the `_rspamd` system user and parses as a
+valid private key - checked by running `openssl pkey` as `_rspamd`
+itself via `runuser`, not just checked for readability by the root
+process running the generator, since those can differ.
+
+`mailserver-deploy` installs the generated `rspamd-dkim_signing.conf`
+to `/etc/rspamd/local.d/dkim_signing.conf` itself when
+`dkim_backend = rspamd` - backed up and rolled back the same way as
+`dovecot-users` if anything fails. Installed and validated (via
+`rspamadm configtest` against the real, running rspamd configuration)
+before dovecot, rspamd, and opensmtpd are restarted, and opensmtpd is
+restarted last of the three - so submission on port 587 never starts
+accepting mail again before the rspamd instance it depends on for
+signing is already running with the new domain-to-key mapping. No
+manual `cp`/`configtest`/`restart` step is needed for routine changes
+(a new domain, a rotated key) - only the one-time rspamd installation
+above is manual.
 
 Proven end-to-end with two independent domains and independent keys:
 each domain's outgoing mail carries exactly one `DKIM-Signature`
 header with the correct `d=` value for its own `From:` domain, no
 spurious signature for the other domain, verified against a real
 mailbox's raw headers.
+
+## Sender authorization on submission
+
+Generated automatically as `smtpd-senders`, wired to the port 587
+listeners via OpenSMTPD's own `senders <table>` listener option -
+requires no manual step once the mail store is deployed.
+
+**Found in production, not designed in advance:** DKIM alone does not
+stop an authenticated user from submitting mail that claims to be a
+different local mailbox. Rspamd correctly declines to sign with a
+domain the authenticated user doesn't own (`allow_username_mismatch`
+defaults to `false`), but OpenSMTPD still accepted and relayed the
+message anyway - just unsigned. Whether that unsigned mail gets
+rejected, quarantined, or delivered then depends entirely on the
+recipient's own SPF/DMARC policy, which is not something to rely on
+for a problem that should be stopped at the source.
+
+`senders` closes this at the SMTP level, before rspamd is even
+involved: an authenticated user may only use `MAIL FROM` addresses
+listed for them in `smtpd-senders`. The table is derived entirely
+from `virtual-local` (see [`configuration.md`](configuration.md)) -
+no separate permission list to maintain, and no address only reachable
+via `virtual-forward` (an external forward target) is ever included.
+Proven for real: the exact spoofing attempt above (authenticated as
+one mailbox, `MAIL FROM` claiming a different mailbox's domain) was
+retested against the deployed table and rejected with
+`530 Sender rejected` at the `MAIL FROM` stage - the message never
+reaches rspamd or the queue.
+
+**Verified for real:** `senders` treats a null envelope sender
+(`MAIL FROM:<>`) like any other address - it must be explicitly
+listed to be allowed, and it is not. `smtpd.conf(5)`/`table(5)` do not
+document this special case; it was confirmed by testing it live:
+authenticated as one mailbox, `MAIL FROM:<>` was rejected with the
+same `530 Sender rejected` as any other unlisted address, alongside
+the sender-spoofing attempt this table exists to stop
+(`MAIL FROM:<info@other-domain>`) and a legitimate own-alias address
+(`250 2.0.0 Ok`) tested in the same session.
+
+This means an authenticated submission user cannot generate a DSN/
+bounce (which requires a null sender) through port 587. This does not
+affect the server's own outbound bounce handling, which goes through
+the `outbound` relay action directly, not through an authenticated
+submission session - `senders` only applies to the port 587
+listeners. Deliberately left as-is rather than special-casing `<>`
+into the generated table: this is stricter than necessary for the
+common case, and there is no real path in this setup that needs an
+authenticated submission client to send with a null sender.
 
 ## Validate the store
 

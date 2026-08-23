@@ -160,11 +160,16 @@ imap_hostname_pattern = imap.%domain%
 smtp_hostname_pattern = smtp.%domain%
 mx_hostname_pattern = mail.%domain%
 dkim_selector = mail
+dkim_backend = none
 vmail_base = /var/vmail
 smtpd_conf_path = /etc/smtpd.conf
 dovecot_users_path = /etc/dovecot/users
 dovecot_lmtp_socket = /run/dovecot/lmtp
 ```
+
+`dkim_backend` is `none` (or unset) by default - DKIM signing is
+opt-in. The only other supported value is `rspamd`; any other value
+fails generation. See [`operations.md`](operations.md) for setup.
 
 ### Hostname patterns
 
@@ -239,11 +244,43 @@ SANs) fails the entire run rather than producing a domain without
 TLS. See [`../docs/architecture.md`](architecture.md) for how this
 fragment relates to `smtpd-mailhosting.conf`.
 
+`rspamd-dkim_signing.conf` and DKIM filter wiring in
+`smtpd-mailtls.conf` are opt-in via the global `dkim_backend` config
+key (`rspamd` or unset/`none`). When enabled, generation fails closed
+the same way: every canonical domain must already have a DKIM private
+key at `/etc/mail/dkim/<domain>.<selector>.key` (created separately
+via `mail-dkim-create`) that is actually readable by the `_rspamd`
+system user and parses as a valid private key - checked by running
+`openssl pkey` as `_rspamd` itself, not just checked for readability
+by the root process running the generator. `mailserver-deploy`
+installs the generated file to rspamd's own
+`local.d/dkim_signing.conf` on the host, with backup and rollback, as
+part of its normal deploy sequence - it is not a separate manual step
+for routine changes. See [`operations.md`](operations.md) for the
+full setup, including why `opensmtpd-filter-dkimsign` (a
+single-instance-per-domain filter chained on the listener) was tested
+and rejected in favor of rspamd.
+
+`smtpd-senders` restricts which envelope-from addresses an
+authenticated submission user may use, via OpenSMTPD's own `senders
+<table>` listener option (not a filter). Derived entirely from
+`virtual-local` rather than a separate permission list: a mailbox may
+send as itself and as any local address (a direct alias, or a
+domain-alias mirror of the mailbox or one of its aliases) that
+`virtual-local` already resolves to it. Addresses only reachable via
+`virtual-forward` (external targets) are never included. This closes
+a real gap found in production: without it, a user authenticated as
+one mailbox could successfully submit mail claiming to be a different
+local mailbox - not signed with that domain's DKIM key (rspamd
+correctly declines when the authenticated user doesn't match), but
+still accepted and relayed unsigned.
+
 A generation contains:
 
 ``` text
 dovecot-users
 smtpd-auth
+smtpd-senders
 smtpd-domains
 smtpd-local-recipients
 smtpd-forward-recipients
@@ -251,6 +288,7 @@ virtual-local
 virtual-forward
 smtpd-mailhosting.conf
 smtpd-mailtls.conf
+rspamd-dkim_signing.conf
 ```
 
 These files are regenerated from the store and must not be edited as
