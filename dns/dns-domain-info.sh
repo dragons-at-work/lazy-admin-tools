@@ -100,12 +100,17 @@ for entry in "${RECORDS[@]}"; do
 		fi
 		if [[ -z "$result" ]]; then
 			echo "  $ns: (kein Record)"
+			canon="__EMPTY__"
 		else
 			echo "$result" | while IFS= read -r line; do
 				echo "  $ns: $line"
 			done
+			# Record-Reihenfolge ist nicht semantisch - vor dem
+			# Vergleich sortieren, sonst gilt dieselbe Menge in
+			# anderer Reihenfolge faelschlich als abweichend.
+			canon="$(echo "$result" | sort -u)"
 		fi
-		seen["$result"]=1
+		seen["$canon"]=1
 	done <<< "$NS_LIST"
 
 	if [[ "$FAILED" == no && "${#seen[@]}" -gt 1 ]]; then
