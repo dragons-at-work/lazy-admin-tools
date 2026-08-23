@@ -63,7 +63,7 @@ mapfile -t CREDENTIALS < <(strip_comments "$BASE/secrets/users")
 declare -A CANON_SET
 declare -A ALIAS_DOMAIN_SET
 declare -A MAILBOX_SET
-declare -A ALIAS_ADDR_SET
+declare -A ALIAS_PAIR_SET
 declare -A CRED_SET
 
 # --- domains ---
@@ -177,10 +177,17 @@ for line in "${ALIASES[@]}"; do
 	if [[ -n "${MAILBOX_SET[$alias_addr]:-}" ]]; then
 		err "alias address is already a mailbox: $alias_addr"
 	fi
-	if [[ -n "${ALIAS_ADDR_SET[$alias_addr]:-}" ]]; then
-		err "duplicate alias: $alias_addr"
+	# One alias address may legitimately appear on multiple lines
+	# with different targets - that is exactly how multi-recipient
+	# aliases work here (each line becomes its own row in
+	# virtual-local/virtual-forward; OpenSMTPD combines same-key rows
+	# into one expansion). Only the exact same (alias, target) pair
+	# twice is an actual duplicate.
+	pair_key="$alias_addr|$target_addr"
+	if [[ -n "${ALIAS_PAIR_SET[$pair_key]:-}" ]]; then
+		err "duplicate alias entry: $alias_addr -> $target_addr"
 	fi
-	ALIAS_ADDR_SET["$alias_addr"]=1
+	ALIAS_PAIR_SET["$pair_key"]=1
 	if [[ "$alias_addr" == "$target_addr" ]]; then
 		err "self-referencing alias: $alias_addr"
 	fi

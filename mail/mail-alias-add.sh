@@ -5,6 +5,14 @@
 # Target must be either an existing local mailbox or an address outside
 # our managed canonical domains. Alias-to-alias chains are not
 # supported in this version - target resolution stays flat.
+#
+# Multi-recipient aliases are supported by calling this once per
+# target, e.g.:
+#   mail-alias-add wir@example.org sandra@example.org
+#   mail-alias-add wir@example.org michael@example.org
+# Each call adds its own line; OpenSMTPD combines same-key lines into
+# one expansion at delivery time. Only the exact same (alias, target)
+# pair twice is rejected as a duplicate.
 
 set -euo pipefail
 
@@ -75,8 +83,8 @@ if grep -qxF "$ALIAS_ADDRESS" "$BASE/mailboxes"; then
 	exit 1
 fi
 
-if awk -v a="$ALIAS_ADDRESS" '$1==a' "$BASE/aliases" | grep -q .; then
-	echo "[ERROR] alias already exists: $ALIAS_ADDRESS" >&2
+if awk -v a="$ALIAS_ADDRESS" -v t="$TARGET_ADDRESS" '$1==a && $2==t' "$BASE/aliases" | grep -q .; then
+	echo "[ERROR] this exact alias already exists: $ALIAS_ADDRESS -> $TARGET_ADDRESS" >&2
 	exit 1
 fi
 
