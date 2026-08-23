@@ -90,6 +90,18 @@ External target:
 sudo ./mail-alias-add.sh accounting@example.org accounting@example.net
 ```
 
+Multiple recipients - call once per target, same alias address:
+
+``` bash
+sudo ./mail-alias-add.sh wir@example.org sandra@example.org
+sudo ./mail-alias-add.sh wir@example.org michael@example.org
+```
+
+`mailserver-generate` combines these into one table entry. All targets
+for the same alias address must be the same kind - all existing local
+mailboxes, or all external addresses - never a mix; generation refuses
+otherwise.
+
 For a target inside a managed canonical domain, the target must be an
 existing mailbox. Alias chains are not supported in v1.
 
