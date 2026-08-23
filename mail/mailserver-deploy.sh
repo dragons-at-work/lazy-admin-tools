@@ -25,7 +25,10 @@
 # doubles as the rollback target - no separate backup copy of the
 # OpenSMTPD artifacts is needed. dovecot-users (containing password
 # hashes, installed outside of generated/) is still backed up
-# separately before being overwritten.
+# separately before being overwritten. The same applies to
+# dovecot-ssl-sni.conf (per-domain Dovecot TLS/SNI, also installed
+# outside of generated/, into Dovecot's own conf.d/) - both are
+# mandatory, unlike the optional rspamd/nginx artifacts below.
 #
 # This script NEVER edits /etc/smtpd.conf. The host's own smtpd.conf
 # must already contain:
@@ -84,17 +87,18 @@ chmod 700 "$GENERATIONS"
 DKIM_BACKEND=$(read_config dkim_backend)
 AUTOCONFIG_BACKEND=$(read_config autoconfig_backend)
 
-BASE_STEPS=11
+BASE_STEPS=12
 EXTRA_STEPS=0
 [[ "$DKIM_BACKEND" == rspamd ]] && EXTRA_STEPS=$((EXTRA_STEPS + 1))
 [[ "$AUTOCONFIG_BACKEND" == nginx ]] && EXTRA_STEPS=$((EXTRA_STEPS + 1))
 TOTAL_STEPS=$((BASE_STEPS + EXTRA_STEPS))
 
-# Optional install steps (rspamd, then nginx) are numbered
-# sequentially starting right after "install dovecot-users" (step 8),
-# in the order they actually run - only the ones that are enabled
-# consume a step number.
-NEXT_STEP=9
+# Step 8 (install dovecot-users) and step 9 (install Dovecot SNI
+# config) are both mandatory - TLS is core, not opt-in like DKIM or
+# autoconfig. Optional install steps (rspamd, then nginx) are numbered
+# sequentially starting right after, in the order they actually run -
+# only the ones that are enabled consume a step number.
+NEXT_STEP=10
 RSPAMD_INSTALL_STEP=0
 NGINX_INSTALL_STEP=0
 if [[ "$DKIM_BACKEND" == rspamd ]]; then
@@ -118,6 +122,12 @@ fi
 DOVECOT_USERS_PATH=$(read_config dovecot_users_path)
 if [[ -z "$DOVECOT_USERS_PATH" ]]; then
 	echo "[ERROR] dovecot_users_path not set in $BASE/config" >&2
+	exit 1
+fi
+
+DOVECOT_SNI_CONF_PATH=$(read_config dovecot_sni_conf_path)
+if [[ -z "$DOVECOT_SNI_CONF_PATH" ]]; then
+	echo "[ERROR] dovecot_sni_conf_path not set in $BASE/config" >&2
 	exit 1
 fi
 
@@ -226,7 +236,7 @@ if ! "$SCRIPT_DIR/mailserver-validate-generated.sh" --dir "$NEW_GENERATION"; the
 fi
 
 echo ""
-echo "=== Step 5/$TOTAL_STEPS: backup dovecot-users ==="
+echo "=== Step 5/$TOTAL_STEPS: backup dovecot-users and SNI config ==="
 BACKUP_GENERATION="$BACKUPS/$GENERATION_ID"
 mkdir -p "$BACKUPS"
 chmod 700 "$BACKUPS"
@@ -238,7 +248,12 @@ if [[ -f "$DOVECOT_USERS_PATH" ]]; then
 else
 	echo "[INFO] no existing $DOVECOT_USERS_PATH - nothing to back up"
 fi
-echo "[OK] dovecot-users backed up to $BACKUP_GENERATION"
+if [[ -f "$DOVECOT_SNI_CONF_PATH" ]]; then
+	cp -p "$DOVECOT_SNI_CONF_PATH" "$BACKUP_GENERATION/dovecot-ssl-sni.conf"
+else
+	echo "[INFO] no existing $DOVECOT_SNI_CONF_PATH - nothing to back up"
+fi
+echo "[OK] dovecot-users and SNI config backed up to $BACKUP_GENERATION"
 
 rollback() {
 	echo "" >&2
@@ -262,6 +277,15 @@ rollback() {
 			chmod 640 "$DOVECOT_USERS_PATH"
 		fi
 		echo "[OK] rolled back $DOVECOT_USERS_PATH (root:dovecot 0640)" >&2
+	fi
+	if [[ "${DOVECOT_SNI_INSTALLED:-no}" == yes ]]; then
+		if [[ -f "$BACKUP_GENERATION/dovecot-ssl-sni.conf" ]]; then
+			cp "$BACKUP_GENERATION/dovecot-ssl-sni.conf" "$DOVECOT_SNI_CONF_PATH"
+			echo "[OK] rolled back $DOVECOT_SNI_CONF_PATH" >&2
+		else
+			rm -f "$DOVECOT_SNI_CONF_PATH"
+			echo "[OK] removed $DOVECOT_SNI_CONF_PATH (none existed before this run)" >&2
+		fi
 	fi
 	if [[ "${RSPAMD_DKIM_INSTALLED:-no}" == yes ]]; then
 		if [[ -n "${RSPAMD_DKIM_BACKUP:-}" && -f "$RSPAMD_DKIM_BACKUP" ]]; then
@@ -390,6 +414,23 @@ rm -f "$TMP_DOVECOT_CONF"
 
 mv "$TMP_DOVECOT_USERS" "$DOVECOT_USERS_PATH"
 echo "[OK] installed $DOVECOT_USERS_PATH (root:dovecot 0640)"
+
+echo ""
+echo "=== Step 9/$TOTAL_STEPS: install Dovecot SNI config ==="
+DOVECOT_SNI_INSTALLED=no
+mkdir -p "$(dirname "$DOVECOT_SNI_CONF_PATH")"
+TMP_DOVECOT_SNI=$(mktemp "$(dirname "$DOVECOT_SNI_CONF_PATH")/.mailserver-sni.XXXXXX")
+cp "$NEW_GENERATION/dovecot-ssl-sni.conf" "$TMP_DOVECOT_SNI"
+chmod 644 "$TMP_DOVECOT_SNI"
+mv "$TMP_DOVECOT_SNI" "$DOVECOT_SNI_CONF_PATH"
+DOVECOT_SNI_INSTALLED=yes
+
+if ! doveconf -n > /dev/null 2>&1; then
+	echo "[ERROR] production Dovecot configuration does not validate with the new SNI config" >&2
+	rollback
+	exit 1
+fi
+echo "[OK] installed $DOVECOT_SNI_CONF_PATH, production Dovecot configuration validates"
 
 # --- Optional: rspamd DKIM config, only when dkim_backend = rspamd.
 #     Installed and validated BEFORE any service is restarted -

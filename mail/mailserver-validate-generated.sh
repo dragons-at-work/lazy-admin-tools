@@ -64,7 +64,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 	exit 1
 fi
 
-for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-senders smtpd-mailhosting.conf smtpd-mailtls.conf rspamd-dkim_signing.conf nginx-autoconfig.conf; do
+for f in smtpd-domains smtpd-local-recipients smtpd-forward-recipients virtual-local virtual-forward dovecot-users smtpd-auth smtpd-senders smtpd-mailhosting.conf smtpd-mailtls.conf dovecot-ssl-sni.conf rspamd-dkim_signing.conf nginx-autoconfig.conf; do
 	if [[ ! -f "$GEN/$f" ]]; then
 		echo "[ERROR] $GEN/$f not found - run mailserver-generate first" >&2
 		exit 1
@@ -128,6 +128,11 @@ userdb static {
   }
 }
 EOF
+
+# Real generated content, not reconstructed here - same reasoning as
+# the OpenSMTPD include above: a second hand-written equivalent could
+# drift from what mailserver-deploy actually installs.
+cat "$GEN/dovecot-ssl-sni.conf" >> "$TMP_DOVECOT_CONF"
 
 if doveconf -c "$TMP_DOVECOT_CONF" -n > /dev/null; then
 	echo "[OK] generated Dovecot configuration is valid ($GEN)"

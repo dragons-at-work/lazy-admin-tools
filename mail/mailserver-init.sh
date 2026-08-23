@@ -61,10 +61,14 @@ create_file "$BASE/config" 0644 \
 	"imap_hostname_pattern = imap.%domain%" \
 	"smtp_hostname_pattern = smtp.%domain%" \
 	"mx_hostname_pattern = mail.%domain%" \
+	"autoconfig_hostname_pattern = autoconfig.%domain%" \
 	"dkim_selector = mail" \
+	"dkim_backend = none" \
+	"autoconfig_backend = none" \
 	"vmail_base = /var/vmail" \
 	"smtpd_conf_path = /etc/smtpd.conf" \
 	"dovecot_users_path = /etc/dovecot/users" \
+	"dovecot_sni_conf_path = /etc/dovecot/conf.d/90-mailserver-sni.conf" \
 	"dovecot_lmtp_socket = /run/dovecot/lmtp"
 
 create_file "$BASE/domain-overrides" 0644 \

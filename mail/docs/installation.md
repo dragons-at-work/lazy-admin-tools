@@ -103,6 +103,31 @@ lazy-admin-tools scripts.
 The generated fragments reference their generation's OpenSMTPD
 tables.
 
+## Dovecot integration
+
+Unlike OpenSMTPD, no manual `include` line is needed - Dovecot's own
+default `dovecot.conf` already wildcard-includes `conf.d/*.conf`.
+`mailserver-deploy` installs the generated per-domain TLS/SNI config
+directly to the path configured as `dovecot_sni_conf_path` (default
+`/etc/dovecot/conf.d/90-mailserver-sni.conf`).
+
+`dovecot_sni_conf_path` is a required config key, same as
+`dovecot_users_path` - `mailserver-init` only writes it into a fresh
+`/etc/mailserver/config`, so an existing installation predating this
+key must add it by hand once before the next `mailserver-generate`/
+`mailserver-deploy`:
+
+``` text
+dovecot_sni_conf_path = /etc/dovecot/conf.d/90-mailserver-sni.conf
+```
+
+Without a per-domain SNI match, Dovecot silently falls back to
+whichever certificate a host-level default names - correct for
+exactly one domain and wrong for every other. This was found
+manually (Thunderbird presenting the wrong domain's certificate) and
+is why this integration exists as generated, deployed configuration
+rather than a one-off manual fix.
+
 ## Existing system aliases
 
 A normal host `/etc/aliases` setup can remain in place.
@@ -184,19 +209,31 @@ sudo ./mailserver-deploy.sh
 The generation-based deploy:
 
 1.  validates the store;
-2.  verifies that the current production OpenSMTPD and Dovecot
-    configuration is healthy;
+2.  verifies that the current production OpenSMTPD, Dovecot, and (if
+    enabled) rspamd/nginx configuration is healthy;
 3.  builds a fresh generation;
 4.  validates that generation independently;
-5.  backs up the current Dovecot users file;
+5.  backs up the current Dovecot users file and SNI config;
 6.  atomically promotes the new generation through
     `/etc/mailserver/generated`;
 7.  validates production OpenSMTPD against the promoted generation;
 8.  installs the generated Dovecot users file;
-9.  restarts Dovecot and OpenSMTPD;
-10. performs a live Dovecot user lookup when a mailbox exists;
-11. retains the previous generation and credential backup for
+9.  installs the generated Dovecot per-domain TLS/SNI config
+    (mandatory, same as the users file - not opt-in);
+10. installs the generated rspamd DKIM config, only when
+    `dkim_backend = rspamd`;
+11. installs the generated autoconfig nginx vhost and per-domain XML
+    files, only when `autoconfig_backend = nginx`;
+12. restarts Dovecot, (if installed) rspamd, and OpenSMTPD, then
+    reloads nginx if the autoconfig vhost was installed;
+13. performs a live Dovecot user lookup when a mailbox exists;
+14. retains the previous generation and credential/config backups for
     rollback/audit purposes.
+
+Steps 10 and 11 are skipped without error when their respective
+backend is not enabled - the total step count shown by the script
+adjusts accordingly (12 steps with both disabled, up to 14 with both
+enabled).
 
 An existing legacy `/etc/mailserver/generated/` directory is preserved
 during the first generation-based deploy as a `pre-generations-*`
