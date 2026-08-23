@@ -93,12 +93,12 @@ EXTRA_STEPS=0
 [[ "$AUTOCONFIG_BACKEND" == nginx ]] && EXTRA_STEPS=$((EXTRA_STEPS + 1))
 TOTAL_STEPS=$((BASE_STEPS + EXTRA_STEPS))
 
-# Step 9 (install dovecot-users) and step 10 (install Dovecot SNI
+# Step 8 (install dovecot-users) and step 9 (install Dovecot SNI
 # config) are both mandatory - TLS is core, not opt-in like DKIM or
 # autoconfig. Optional install steps (rspamd, then nginx) are numbered
 # sequentially starting right after, in the order they actually run -
 # only the ones that are enabled consume a step number.
-NEXT_STEP=11
+NEXT_STEP=10
 RSPAMD_INSTALL_STEP=0
 NGINX_INSTALL_STEP=0
 if [[ "$DKIM_BACKEND" == rspamd ]]; then
