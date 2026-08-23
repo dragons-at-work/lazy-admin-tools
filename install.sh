@@ -1,6 +1,6 @@
 #!/bin/bash
 # lazy-admin-tools: install.sh - install toolsets and set up symlinks
-# Usage: install.sh [health|mail|cert]... | install.sh --all
+# Usage: install.sh [health|mail|cert|dns]... | install.sh --all
 #
 # Follows the layout already documented in README.md:
 #   health/  -> /usr/local/libexec/lazy-admin-tools/health/  (no symlinks,
@@ -8,6 +8,8 @@
 #   mail/    -> /usr/local/lib/lazy-admin-tools/mail/         + symlinks
 #   cert/    -> /usr/local/lib/lazy-admin-tools/cert/          + symlinks
 #               (backends/ and hooks/ copied alongside)
+#   dns/     -> /usr/local/lib/lazy-admin-tools/dns/            + symlinks
+#               (backends/ copied alongside)
 #
 # Run from the repository root. Idempotent AND clean: each component's
 # destination directory is rebuilt from scratch on every run (removed,
@@ -40,21 +42,21 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 if [[ $# -eq 0 ]]; then
-	echo "Usage: install.sh [health|mail|cert]... | install.sh --all" >&2
+	echo "Usage: install.sh [health|mail|cert|dns]... | install.sh --all" >&2
 	exit 2
 fi
 
 if [[ "$1" == --all ]]; then
-	COMPONENTS=(health mail cert)
+	COMPONENTS=(health mail cert dns)
 else
 	COMPONENTS=("$@")
 fi
 
 for c in "${COMPONENTS[@]}"; do
 	case "$c" in
-		health|mail|cert) ;;
+		health|mail|cert|dns) ;;
 		*)
-			echo "[ERROR] unknown component: $c (expected: health, mail, cert)" >&2
+			echo "[ERROR] unknown component: $c (expected: health, mail, cert, dns)" >&2
 			exit 2
 			;;
 	esac
@@ -138,12 +140,34 @@ install_cert() {
 	echo "[OK] symlinked cert commands into $SBIN"
 }
 
+install_dns() {
+	local dest="$LIB_ROOT/dns"
+	rm -rf "$dest"
+	mkdir -p "$dest/backends"
+	cp "$SCRIPT_DIR"/dns/*.sh "$dest/"
+	cp "$SCRIPT_DIR"/dns/README.md "$dest/" 2>/dev/null || true
+	cp "$SCRIPT_DIR"/dns/backends/*.sh "$dest/backends/"
+	chmod +x "$dest"/*.sh "$dest"/backends/*.sh
+	echo "[OK] installed dns/ -> $dest"
+
+	local names=""
+	for f in "$dest"/*.sh; do
+		local name
+		name="$(basename "$f" .sh)"
+		ln -sf "$f" "$SBIN/$name"
+		names="$names $name"
+	done
+	prune_stale_symlinks "$dest" "$names"
+	echo "[OK] symlinked dns commands into $SBIN"
+}
+
 for c in "${COMPONENTS[@]}"; do
 	echo "=== $c ==="
 	case "$c" in
 		health) install_health ;;
 		mail) install_mail ;;
 		cert) install_cert ;;
+		dns) install_dns ;;
 	esac
 	echo ""
 done
