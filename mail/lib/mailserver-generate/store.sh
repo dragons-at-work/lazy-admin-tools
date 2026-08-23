@@ -117,22 +117,28 @@ while read -r alias_domain canonical_domain; do
 		echo "$mirrored" >> "$OUT/smtpd-local-recipients"
 	done < <(strip_comments "$BASE/mailboxes")
 
-	# mirror every alias under the canonical domain, preserving its
-	# local/forward classification via the already-generated tables
-	while read -r alias_addr target_addr; do
+	# mirror every alias under the canonical domain, using the
+	# already-aggregated LOCAL_TARGETS/FORWARD_TARGETS built above -
+	# never re-reads/re-classifies the raw aliases store here. That
+	# is deliberate: classification (local vs. external) and
+	# multi-recipient aggregation must happen in exactly one place,
+	# or a domain-alias mirror of a multi-recipient alias would
+	# regenerate the same repeated-key problem the aggregation above
+	# exists to avoid - which is exactly what happened here before
+	# this was found in review.
+	for alias_addr in "${ALIAS_ORDER[@]}"; do
 		alias_domain_part="${alias_addr#*@}"
 		[[ "$alias_domain_part" == "$canonical_domain" ]] || continue
 		localpart="${alias_addr%@*}"
 		mirrored="${localpart}@${alias_domain}"
-		target_domain="${target_addr#*@}"
-		if [[ -n "${CANON_DOMAINS[$target_domain]:-}" ]] && is_mailbox "$target_addr"; then
-			echo "$mirrored $target_addr" >> "$OUT/virtual-local"
+		if [[ -n "${LOCAL_TARGETS[$alias_addr]:-}" ]]; then
+			echo "$mirrored ${LOCAL_TARGETS[$alias_addr]}" >> "$OUT/virtual-local"
 			echo "$mirrored" >> "$OUT/smtpd-local-recipients"
 		else
-			echo "$mirrored $target_addr" >> "$OUT/virtual-forward"
+			echo "$mirrored ${FORWARD_TARGETS[$alias_addr]}" >> "$OUT/virtual-forward"
 			echo "$mirrored" >> "$OUT/smtpd-forward-recipients"
 		fi
-	done < <(strip_comments "$BASE/aliases")
+	done
 done < <(strip_comments "$BASE/domain-aliases")
 
 sort -u -o "$OUT/virtual-local" "$OUT/virtual-local"
