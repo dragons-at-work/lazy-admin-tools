@@ -188,6 +188,25 @@ doas chmod +x /usr/local/libexec/lazy-admin-tools/health/openbsd-health.sh
 Use the analogous path for `health/debian-health.sh` on Debian hosts,
 using `sudo` instead of `doas`.
 
+**Before first use on any host**, create the host-local baseline
+config - the scripts refuse to run without it rather than falling
+back to example values that don't match your actual server:
+
+``` sh
+doas mkdir -p /usr/local/etc/lazy-admin-tools
+doas tee /usr/local/etc/lazy-admin-tools/health.conf <<'EOF'
+MAILTO="adm-yourhost@example.org"
+EXPECTED_SERVICES="httpd relayd smtpd sshd"
+EXPECTED_PORTS="22 80 443"
+EOF
+```
+
+Determine the real values first with `rcctl ls started` / `netstat -an
+-f inet` (OpenBSD) or `systemctl list-units --type=service
+--state=running` / `ss -tln` (Debian). This file is host-specific
+configuration, not part of this repository - `install.sh` never
+creates, edits, or deletes it, so it survives every reinstall.
+
 ### Mail administration
 
 Installed below `/usr/local/lib`, with administrator-facing commands
@@ -220,21 +239,21 @@ port 80 (IPv4 and IPv6) reachable from the internet. See
 
 ### Health checks
 
-Edit the variables at the top of the appropriate script:
+Create the host-local baseline first (see
+[Installation](#health-checks) above) - the scripts refuse to run
+without `/usr/local/etc/lazy-admin-tools/health.conf`:
 
 ``` sh
 MAILTO="adm-myhost@example.com"
-
-CHECK_DISK=yes
-DISK_WARN_PCT=80
-DISK_ERROR_PCT=95
-
-CHECK_SERVICES=yes
 EXPECTED_SERVICES="httpd relayd smtpd sshd"
-
-CHECK_PORTS=yes
 EXPECTED_PORTS="22 80 443"
 ```
+
+The disk/service/port/update check toggles (`CHECK_DISK`,
+`DISK_WARN_PCT`, etc.) remain inside the script itself - those are
+behavior, not host identity, and are fine to change via a normal pull
+request or by editing the installed copy the same way you'd patch any
+other tool here.
 
 Then add it to `/etc/crontab` to run daily:
 

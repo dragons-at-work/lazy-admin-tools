@@ -1,27 +1,51 @@
 #!/bin/bash
 # lazy-admin-tools: Debian Health Check
 # Runs daily via cron, sends report via mail.
+#
+# Host-specific baseline (which mail address, which services and
+# ports are actually expected to run) lives in a separate, host-local
+# config file - never in this script and never inside this repository.
+# install.sh rebuilds this script's own directory from scratch on
+# every run; a baseline edited directly in this file would be silently
+# destroyed the next time install.sh runs. The config file below is
+# never created, modified, or deleted by install.sh or by this repo -
+# only by you, once, per host.
+
+# --- Host-local configuration ---
+CONF_FILE=/usr/local/etc/lazy-admin-tools/health.conf
+
+if [[ ! -f "$CONF_FILE" ]]; then
+	echo "[ERROR] $CONF_FILE not found." >&2
+	echo "[ERROR] Create it with your host's real baseline, e.g.:" >&2
+	echo "  sudo mkdir -p $(dirname "$CONF_FILE")" >&2
+	echo "  sudo tee $CONF_FILE <<'EOF'" >&2
+	echo "MAILTO=\"adm-\$(hostname -s)@example.org\"" >&2
+	echo "EXPECTED_SERVICES=\"ssh ufw fail2ban\"" >&2
+	echo "EXPECTED_PORTS=\"22\"" >&2
+	echo "EOF" >&2
+	echo "[ERROR] determine the real values first with:" >&2
+	echo "  systemctl list-units --type=service --state=running --no-legend" >&2
+	echo "  ss -tln" >&2
+	exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$CONF_FILE"
+
+for var in MAILTO EXPECTED_SERVICES EXPECTED_PORTS; do
+	if [[ -z "${!var:-}" ]]; then
+		echo "[ERROR] $CONF_FILE does not set $var" >&2
+		exit 1
+	fi
+done
 
 # --- Configuration ---
-MAILTO="root"
-
 CHECK_DISK=yes
 DISK_WARN_PCT=80
 DISK_ERROR_PCT=95
 
 CHECK_SERVICES=yes
-# Complete list of services expected to be running - any running
-# service not listed here triggers a WARN, so this must be your full
-# baseline, not just the services you care about. Before first use,
-# determine your actual baseline with:
-#   systemctl list-units --type=service --state=running --no-legend
-# Example only - replace with your real service list.
-EXPECTED_SERVICES="ssh ufw fail2ban"
-
 CHECK_PORTS=yes
-# Example only - the SSH port you actually use, plus any public services.
-EXPECTED_PORTS="22"
-
 CHECK_UPDATES=yes
 
 # --- End configuration ---

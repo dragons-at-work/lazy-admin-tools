@@ -1,26 +1,51 @@
 #!/bin/sh
 # lazy-admin-tools: OpenBSD Health Check
 # Runs daily via cron, sends report via mail.
+#
+# Host-specific baseline (which mail address, which services and
+# ports are actually expected to run) lives in a separate, host-local
+# config file - never in this script and never inside this repository.
+# install.sh rebuilds this script's own directory from scratch on
+# every run; a baseline edited directly in this file would be silently
+# destroyed the next time install.sh runs. The config file below is
+# never created, modified, or deleted by install.sh or by this repo -
+# only by you, once, per host.
+
+# --- Host-local configuration ---
+CONF_FILE=/usr/local/etc/lazy-admin-tools/health.conf
+
+if [ ! -f "$CONF_FILE" ]; then
+	echo "[ERROR] $CONF_FILE not found." >&2
+	echo "[ERROR] Create it with your host's real baseline, e.g.:" >&2
+	echo "  doas mkdir -p $(dirname "$CONF_FILE")" >&2
+	echo "  doas tee $CONF_FILE <<'EOF'" >&2
+	echo "MAILTO=\"adm-\$(hostname -s)@example.org\"" >&2
+	echo "EXPECTED_SERVICES=\"httpd relayd smtpd sshd\"" >&2
+	echo "EXPECTED_PORTS=\"22 80 443\"" >&2
+	echo "EOF" >&2
+	echo "[ERROR] determine the real values first with:" >&2
+	echo "  rcctl ls started" >&2
+	echo "  netstat -an -f inet" >&2
+	exit 1
+fi
+
+. "$CONF_FILE"
+
+for var in MAILTO EXPECTED_SERVICES EXPECTED_PORTS; do
+	eval "val=\$$var"
+	if [ -z "$val" ]; then
+		echo "[ERROR] $CONF_FILE does not set $var" >&2
+		exit 1
+	fi
+done
 
 # --- Configuration ---
-MAILTO="root"
-
 CHECK_DISK=yes
 DISK_WARN_PCT=80
 DISK_ERROR_PCT=95
 
 CHECK_SERVICES=yes
-# Complete list of services expected to be running - any running
-# service not listed here triggers a WARN, so this must be your full
-# baseline, not just the services you care about. Before first use,
-# determine your actual baseline with:
-#   rcctl ls started
-# Example only - replace with your real service list.
-EXPECTED_SERVICES="httpd relayd smtpd sshd"
-
 CHECK_PORTS=yes
-EXPECTED_PORTS="22 80 443"
-
 CHECK_PATCHES=yes
 
 # --- End configuration ---
