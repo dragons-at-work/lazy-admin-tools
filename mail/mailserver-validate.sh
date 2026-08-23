@@ -64,6 +64,8 @@ declare -A CANON_SET
 declare -A ALIAS_DOMAIN_SET
 declare -A MAILBOX_SET
 declare -A ALIAS_PAIR_SET
+declare -A ALIAS_HAS_LOCAL
+declare -A ALIAS_HAS_FORWARD
 declare -A CRED_SET
 
 # --- domains ---
@@ -179,10 +181,13 @@ for line in "${ALIASES[@]}"; do
 	fi
 	# One alias address may legitimately appear on multiple lines
 	# with different targets - that is exactly how multi-recipient
-	# aliases work here (each line becomes its own row in
-	# virtual-local/virtual-forward; OpenSMTPD combines same-key rows
-	# into one expansion). Only the exact same (alias, target) pair
-	# twice is an actual duplicate.
+	# aliases work here. mailserver-generate aggregates all targets
+	# for the same alias into one comma-separated value, matching
+	# OpenSMTPD's table(5) aliasing format (one key, one-or-many
+	# recipients in the value) - it does NOT rely on repeated key
+	# lines being combined, which table(5) does not document. Only
+	# the exact same (alias, target) pair twice is an actual
+	# duplicate here.
 	pair_key="$alias_addr|$target_addr"
 	if [[ -n "${ALIAS_PAIR_SET[$pair_key]:-}" ]]; then
 		err "duplicate alias entry: $alias_addr -> $target_addr"
@@ -192,8 +197,18 @@ for line in "${ALIASES[@]}"; do
 		err "self-referencing alias: $alias_addr"
 	fi
 	target_dom="${target_addr#*@}"
+	if [[ -n "${CANON_SET[$target_dom]:-}" ]] && [[ -n "${MAILBOX_SET[$target_addr]:-}" ]]; then
+		ALIAS_HAS_LOCAL["$alias_addr"]=1
+	else
+		ALIAS_HAS_FORWARD["$alias_addr"]=1
+	fi
 	if [[ -n "${CANON_SET[$target_dom]:-}" ]] && [[ -z "${MAILBOX_SET[$target_addr]:-}" ]]; then
 		err "alias target is local but not an existing mailbox (chains not supported): $alias_addr -> $target_addr"
+	fi
+done
+for alias_addr in "${!ALIAS_HAS_LOCAL[@]}"; do
+	if [[ -n "${ALIAS_HAS_FORWARD[$alias_addr]:-}" ]]; then
+		err "alias has both local and external targets, which is not supported: $alias_addr (virtual_local and virtual_forward are separate OpenSMTPD actions - only one can fire per recipient)"
 	fi
 done
 echo "[OK] aliases: ${#ALIASES[@]} entries"
