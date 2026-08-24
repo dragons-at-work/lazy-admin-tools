@@ -133,6 +133,23 @@ contact@example.org
     -> Dovecot
 ```
 
+An alias with multiple local targets expands to a single OpenSMTPD
+table entry with a comma-separated value - not one entry per target -
+matching `table(5)`'s own aliasing format:
+
+``` text
+wir@example.org
+    -> sandra@example.org, michael@example.org
+    -> vmail (each)
+    -> LMTP
+    -> Dovecot
+```
+
+A domain-alias mirror of such an alias reuses this same aggregated
+target list under its own mirrored address, rather than being
+reclassified independently - see [`configuration.md`](configuration.md)
+for the declarative store format this is derived from.
+
 Alias-to-alias chains are intentionally not supported by the declarative
 store in v1.
 

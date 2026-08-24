@@ -127,6 +127,35 @@ A target is either:
 -   an existing mailbox in a managed canonical domain; or
 -   an external address.
 
+A single alias address may appear on multiple lines with different
+targets - this is how multi-recipient aliases are declared:
+
+``` text
+wir@example.org sandra@example.org
+wir@example.org michael@example.org
+```
+
+`mailserver-generate` aggregates all lines for the same alias address
+into one generated table entry with a comma-separated value, matching
+OpenSMTPD's `table(5)` aliasing format (one key, one-or-many
+recipients per line - not repeated keys). The exact same
+`(alias, target)` pair twice is rejected as a duplicate; different
+targets for the same alias address are not.
+
+All targets for one alias address must be the same kind - either all
+existing local mailboxes, or all external addresses, never a mix.
+`virtual_local` (local delivery) and `virtual_forward` (external
+relay) are two separate OpenSMTPD actions; only one fires per
+recipient, so a mixed alias would silently deliver to only half its
+targets. Both `mailserver-validate` and `mailserver-generate` reject
+this.
+
+A domain-alias mirror of a multi-recipient alias (see
+[`domain-aliases`](#domain-aliases) above) reuses this same
+aggregated result under its mirrored address - it is not
+reclassified or re-aggregated separately, so the mirror always
+matches the canonical alias's target list exactly.
+
 Alias-to-alias chains are not supported in v1.
 
 ## `defaults`

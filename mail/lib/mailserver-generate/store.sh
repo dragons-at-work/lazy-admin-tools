@@ -51,16 +51,58 @@ while read -r addr; do
 done < <(strip_comments "$BASE/mailboxes")
 
 # Aliases: local target (points at a real mailbox) vs external target.
+# All targets for the same alias address are aggregated first, then
+# written as ONE line per alias with a comma-separated value list -
+# OpenSMTPD's table(5) aliasing format documents multiple recipients
+# as "one or many recipients" in the value of a single key line, not
+# as repeated key lines (a repeated key is not documented as unioned
+# and must not be relied upon).
+declare -A LOCAL_TARGETS
+declare -A FORWARD_TARGETS
+declare -a ALIAS_ORDER
+declare -A ALIAS_SEEN
+
 while read -r alias_addr target_addr; do
+	if [[ -z "${ALIAS_SEEN[$alias_addr]:-}" ]]; then
+		ALIAS_SEEN["$alias_addr"]=1
+		ALIAS_ORDER+=("$alias_addr")
+	fi
 	target_domain="${target_addr#*@}"
 	if [[ -n "${CANON_DOMAINS[$target_domain]:-}" ]] && is_mailbox "$target_addr"; then
-		echo "$alias_addr $target_addr" >> "$OUT/virtual-local"
-		echo "$alias_addr" >> "$OUT/smtpd-local-recipients"
+		if [[ -n "${LOCAL_TARGETS[$alias_addr]:-}" ]]; then
+			LOCAL_TARGETS["$alias_addr"]="${LOCAL_TARGETS[$alias_addr]},$target_addr"
+		else
+			LOCAL_TARGETS["$alias_addr"]="$target_addr"
+		fi
 	else
-		echo "$alias_addr $target_addr" >> "$OUT/virtual-forward"
-		echo "$alias_addr" >> "$OUT/smtpd-forward-recipients"
+		if [[ -n "${FORWARD_TARGETS[$alias_addr]:-}" ]]; then
+			FORWARD_TARGETS["$alias_addr"]="${FORWARD_TARGETS[$alias_addr]},$target_addr"
+		else
+			FORWARD_TARGETS["$alias_addr"]="$target_addr"
+		fi
 	fi
 done < <(strip_comments "$BASE/aliases")
+
+# A single alias cannot have both local and external targets: virtual
+# <virtual_local> (LMTP delivery) and virtual <virtual_forward>
+# (relay) are two separate OpenSMTPD actions, matched by two separate
+# rcpt-to tables - only one action fires per recipient, so a mixed
+# alias would silently deliver to only one half of its targets.
+# Fail-closed here rather than generate something that looks complete
+# but only half-works.
+for alias_addr in "${ALIAS_ORDER[@]}"; do
+	if [[ -n "${LOCAL_TARGETS[$alias_addr]:-}" && -n "${FORWARD_TARGETS[$alias_addr]:-}" ]]; then
+		echo "[ERROR] alias has both local and external targets, which is not supported: $alias_addr (local: ${LOCAL_TARGETS[$alias_addr]}; external: ${FORWARD_TARGETS[$alias_addr]})" >&2
+		exit 1
+	fi
+	if [[ -n "${LOCAL_TARGETS[$alias_addr]:-}" ]]; then
+		echo "$alias_addr ${LOCAL_TARGETS[$alias_addr]}" >> "$OUT/virtual-local"
+		echo "$alias_addr" >> "$OUT/smtpd-local-recipients"
+	else
+		echo "$alias_addr ${FORWARD_TARGETS[$alias_addr]}" >> "$OUT/virtual-forward"
+		echo "$alias_addr" >> "$OUT/smtpd-forward-recipients"
+	fi
+done
 
 # --- domain aliases: explicit 1:1 expansion, no dynamic rewriting
 #     (OpenSMTPD virtual tables do not support %{rcpt.user} substitution) ---
@@ -75,22 +117,28 @@ while read -r alias_domain canonical_domain; do
 		echo "$mirrored" >> "$OUT/smtpd-local-recipients"
 	done < <(strip_comments "$BASE/mailboxes")
 
-	# mirror every alias under the canonical domain, preserving its
-	# local/forward classification via the already-generated tables
-	while read -r alias_addr target_addr; do
+	# mirror every alias under the canonical domain, using the
+	# already-aggregated LOCAL_TARGETS/FORWARD_TARGETS built above -
+	# never re-reads/re-classifies the raw aliases store here. That
+	# is deliberate: classification (local vs. external) and
+	# multi-recipient aggregation must happen in exactly one place,
+	# or a domain-alias mirror of a multi-recipient alias would
+	# regenerate the same repeated-key problem the aggregation above
+	# exists to avoid - which is exactly what happened here before
+	# this was found in review.
+	for alias_addr in "${ALIAS_ORDER[@]}"; do
 		alias_domain_part="${alias_addr#*@}"
 		[[ "$alias_domain_part" == "$canonical_domain" ]] || continue
 		localpart="${alias_addr%@*}"
 		mirrored="${localpart}@${alias_domain}"
-		target_domain="${target_addr#*@}"
-		if [[ -n "${CANON_DOMAINS[$target_domain]:-}" ]] && is_mailbox "$target_addr"; then
-			echo "$mirrored $target_addr" >> "$OUT/virtual-local"
+		if [[ -n "${LOCAL_TARGETS[$alias_addr]:-}" ]]; then
+			echo "$mirrored ${LOCAL_TARGETS[$alias_addr]}" >> "$OUT/virtual-local"
 			echo "$mirrored" >> "$OUT/smtpd-local-recipients"
 		else
-			echo "$mirrored $target_addr" >> "$OUT/virtual-forward"
+			echo "$mirrored ${FORWARD_TARGETS[$alias_addr]}" >> "$OUT/virtual-forward"
 			echo "$mirrored" >> "$OUT/smtpd-forward-recipients"
 		fi
-	done < <(strip_comments "$BASE/aliases")
+	done
 done < <(strip_comments "$BASE/domain-aliases")
 
 sort -u -o "$OUT/virtual-local" "$OUT/virtual-local"
@@ -120,11 +168,18 @@ echo "[OK] generated smtpd-forward-recipients ($(wc -l < "$OUT/smtpd-forward-rec
 #     usable as a local submission identity. ---
 declare -A SENDERS_FOR
 while read -r key value; do
-	if [[ "$value" == vmail ]]; then
-		SENDERS_FOR["$key"]="${SENDERS_FOR[$key]:+${SENDERS_FOR[$key]},}$key"
-	else
-		SENDERS_FOR["$value"]="${SENDERS_FOR[$value]:+${SENDERS_FOR[$value]},}$key"
-	fi
+	# value may itself be a comma-separated list now (multi-recipient
+	# alias) - split it, since each individual mailbox address in
+	# there needs its own smtpd-senders entry, not one entry keyed by
+	# the whole raw comma string.
+	IFS=',' read -ra targets <<< "$value"
+	for target in "${targets[@]}"; do
+		if [[ "$target" == vmail ]]; then
+			SENDERS_FOR["$key"]="${SENDERS_FOR[$key]:+${SENDERS_FOR[$key]},}$key"
+		else
+			SENDERS_FOR["$target"]="${SENDERS_FOR[$target]:+${SENDERS_FOR[$target]},}$key"
+		fi
+	done
 done < "$OUT/virtual-local"
 
 : > "$OUT/smtpd-senders"
