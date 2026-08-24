@@ -563,6 +563,49 @@ deploy reports that fact rather than inventing a test identity.
 Deployment retains previous generated state and Dovecot-user backups
 required for rollback.
 
-This is not a substitute for a complete mail-data backup strategy.
-Maildir backup, retention policy, restore testing, and off-host backup
+This alone is not a complete mail-data backup strategy. Restore
+testing and any off-host retention beyond what is described below
 remain separate operational work.
+
+### Backing up the store and maildir data
+
+``` bash
+sudo ./mail-backup.sh
+```
+
+Each run creates a timestamped directory under
+`/var/backups/mailserver/<run-id>/` containing:
+
+- a store archive with the declarative source files (`domains`,
+  `domain-aliases`, `config`, `domain-overrides`, `mailboxes`,
+  `aliases`, `defaults`, `secrets/`) and the Dovecot users file -
+  generated artifacts and prior deployment backups are deliberately
+  not included, since those are derived state, not source of truth;
+- an archive of the currently active generation, if one is deployed;
+- one archive per canonical domain under `maildir/`, so a single
+  domain can be restored or inspected without touching the others.
+
+A run that fails partway (a domain's maildir unreadable, a required
+store file missing) reports each failure individually and exits
+non-zero rather than silently producing an incomplete backup. A
+missing store file (any of the eight files `mailserver-init` creates)
+skips the store archive entirely rather than writing one that is
+silently missing a file.
+
+Options:
+
+``` bash
+sudo ./mail-backup.sh --dest-host <host> [--dest-path <path>] [--retention-days N]
+```
+
+`--dest-host` additionally copies the run's backup directory to
+another host over `rsync`/ssh - credentials and SSH key setup for
+that are a one-time manual step, not managed by this script. The
+local backup always happens regardless of whether the remote copy
+succeeds. Default retention is 14 days, applied to local run
+directories only.
+
+Restore is manual: extract the relevant `maildir/<domain>.tar.gz`
+into `vmail_base`, or the store archive into a fresh
+`/etc/mailserver/`, then re-run `mailserver-generate` and
+`mailserver-deploy` as usual.
