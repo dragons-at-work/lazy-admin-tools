@@ -78,18 +78,34 @@ pki $MX_HOST key \"$KEY\""
 
 	# Dovecot has no equivalent of OpenSMTPD's multi-name "pki"
 	# declaration - each additional domain needs its own local_name
-	# block, matched by the hostname the client actually connected
-	# to (IMAP_HOST here; SMTP_HOST would only matter if Dovecot were
-	# also serving submission, which this project's OpenSMTPD does
-	# instead). Without this, Dovecot falls back to whatever ssl_cert
-	# a host-level default names - correct for exactly one domain and
+	# block(s), matched by the hostname the client actually connected
+	# to. Without this, Dovecot falls back to whatever ssl_cert a
+	# host-level default names - correct for exactly one domain and
 	# silently wrong for every other, as found manually on
 	# schwarzer-genealogie.de before this was added.
+	#
+	# Two hostnames get a block, both pointing at the same cert/key
+	# (the cert already covers both as SANs): IMAP_HOST, the intended
+	# per-domain IMAP hostname, and MX_HOST (mail.<domain>) - legacy
+	# tooling and some clients still connect for IMAP via the
+	# mail.<domain> name rather than imap.<domain>, and without an
+	# explicit block for it too, IMAP over mail.<domain> silently
+	# fell back to the host-level default cert, as found manually on
+	# dragons-at-work.de (biocodie.de's certificate was served).
+	# SMTP_HOST is deliberately not covered here - submission runs
+	# through OpenSMTPD in this project, not Dovecot.
 	DOVECOT_SNI_BLOCKS="$DOVECOT_SNI_BLOCKS
 local_name $IMAP_HOST {
   ssl_server_cert_file = $CERT
   ssl_server_key_file = $KEY
 }"
+	if [[ "$MX_HOST" != "$IMAP_HOST" ]]; then
+		DOVECOT_SNI_BLOCKS="$DOVECOT_SNI_BLOCKS
+local_name $MX_HOST {
+  ssl_server_cert_file = $CERT
+  ssl_server_key_file = $KEY
+}"
+	fi
 
 	echo "[OK] $domain: certificate verified ($MX_HOST, covers $SMTP_HOST + $IMAP_HOST)"
 done < <(strip_comments "$BASE/domains")
