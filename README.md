@@ -7,8 +7,9 @@ servers - no framework, no database, no container stack, and no
 unnecessary infrastructure.
 
 The repository currently contains cron-friendly server health checks,
-a declarative multi-domain mail administration toolset, and a
-backend-agnostic TLS certificate request tool.
+a declarative multi-domain mail administration toolset, a
+backend-agnostic TLS certificate request tool, and a backend-agnostic
+DNS lookup tool.
 
 **Status:** Active · **Platforms:** see individual tool sections ·
 **License:** ISC
@@ -33,6 +34,7 @@ The repository currently contains:
 -   `mail/` - declarative multi-domain mail administration for OpenSMTPD
     and Dovecot
 -   `cert/` - backend-agnostic TLS certificate request tool (ACME)
+-   `dns/` - backend-agnostic DNS lookup tool
 
 ## What problem does it solve?
 
@@ -53,12 +55,12 @@ infrastructure unless the underlying service itself requires it.
 
 ### Health checks
 
--   Stable and in daily production use
--   `health/openbsd-health.sh` tested on OpenBSD 7.8
--   `health/debian-health.sh` tested on Debian 12/13
--   Configuration is inline using plain shell variables
--   `EXPECTED_PORTS` is not a complete port whitelist; see [Health
-    checks](#health-checks)
+- Stable and in daily production use
+- `health/openbsd-health.sh` tested on OpenBSD 7.8
+- `health/debian-health.sh` tested on Debian 12/13
+
+See [`health/README.md`](health/README.md) for configuration,
+installation, and usage.
 
 ### Mail administration
 
@@ -110,6 +112,7 @@ lazy-admin-tools/
 ├── LICENSE
 ├── install.sh
 ├── health/
+│   ├── README.md
 │   ├── openbsd-health.sh
 │   └── debian-health.sh
 ├── mail/
@@ -193,46 +196,10 @@ Installation layout depends on the tool family, matching what
 
 ### Health checks
 
-Installed below `/usr/local/libexec`:
-
-``` text
-/usr/local/libexec/lazy-admin-tools/health/
-```
-
-No symlinks are created - health checks are unattended helpers
-normally invoked by cron rather than interactive administrator
-commands. Add them to `/etc/crontab` yourself; see
-[Usage](#health-checks) below.
-
-To install by hand instead of via `install.sh`:
-
-``` sh
-doas mkdir -p /usr/local/libexec/lazy-admin-tools/health
-doas cp health/openbsd-health.sh /usr/local/libexec/lazy-admin-tools/health/
-doas chmod +x /usr/local/libexec/lazy-admin-tools/health/openbsd-health.sh
-```
-
-Use the analogous path for `health/debian-health.sh` on Debian hosts,
-using `sudo` instead of `doas`.
-
-**Before first use on any host**, create the host-local baseline
-config - the scripts refuse to run without it rather than falling
-back to example values that don't match your actual server:
-
-``` sh
-doas mkdir -p /usr/local/etc/lazy-admin-tools
-doas tee /usr/local/etc/lazy-admin-tools/health.conf <<'EOF'
-MAILTO="adm-yourhost@example.org"
-EXPECTED_SERVICES="httpd relayd smtpd sshd"
-EXPECTED_PORTS="22 80 443"
-EOF
-```
-
-Determine the real values first with `rcctl ls started` / `netstat -an
--f inet` (OpenBSD) or `systemctl list-units --type=service
---state=running` / `ss -tln` (Debian). This file is host-specific
-configuration, not part of this repository - `install.sh` never
-creates, edits, or deletes it, so it survives every reinstall.
+Installed below `/usr/local/libexec`, no symlinks - health checks are
+unattended helpers invoked by cron, not interactive commands. See
+[`health/README.md`](health/README.md) for the config file it
+requires before first use and the manual install path.
 
 ### Mail administration
 
@@ -280,84 +247,8 @@ needed - it only performs read-only DNS queries. See
 
 ### Health checks
 
-Create the host-local baseline first (see
-[Installation](#health-checks) above) - the scripts refuse to run
-without `/usr/local/etc/lazy-admin-tools/health.conf`:
-
-``` sh
-MAILTO="adm-myhost@example.com"
-EXPECTED_SERVICES="httpd relayd smtpd sshd"
-EXPECTED_PORTS="22 80 443"
-```
-
-The disk/service/port/update check toggles (`CHECK_DISK`,
-`DISK_WARN_PCT`, etc.) remain inside the script itself - those are
-behavior, not host identity, and are fine to change via a normal pull
-request or by editing the installed copy the same way you'd patch any
-other tool here.
-
-Then add it to `/etc/crontab` to run daily:
-
-``` text
-0 6 * * * root /usr/local/libexec/lazy-admin-tools/health/openbsd-health.sh
-```
-
-The OpenBSD script requires root (`rcctl`, `syspatch`) and mails an
-error report and exits if run without it. Run it via `doas`/`sudo` when
-testing manually, or via cron as root for regular operation.
-
-#### Service semantics
-
-`EXPECTED_SERVICES` must be the complete list of services expected to be
-running, not just the ones you specifically want to watch. Any running
-service not listed there triggers a WARN.
-
-Before first use, determine the actual baseline:
-
-``` sh
-rcctl ls started
-```
-
-``` sh
-systemctl list-units --type=service --state=running --no-legend
-```
-
-Then build `EXPECTED_SERVICES` from that output.
-
-#### Status levels
-
--   **ERROR** - act immediately: a service is not running, an expected
-    port is not listening, or disk usage is above `DISK_ERROR_PCT`.
--   **WARN** - check soon: an unexpected service or port is running,
-    disk usage is above `DISK_WARN_PCT`, or patches/updates are pending.
--   **OK** - nothing to do.
-
-The mail subject reflects the highest level found (`[ERROR]`, `[WARN]`,
-`[OK]`).
-
-#### Port semantics
-
-`EXPECTED_PORTS` is not a complete whitelist of every port allowed to
-listen. It is a list of ports that must be listening somewhere, local or
-public.
-
-The check distinguishes two binding scopes:
-
--   **Public**: bound to `*`, a wildcard, or a real IP - reachable from
-    outside.
--   **Local**: bound to `127.0.0.1`, `::1`, or a loopback interface -
-    reachable only locally.
-
-Consequences:
-
--   A missing expected port, neither public nor local, is an **ERROR**.
--   Additional **local** ports do not trigger a warning.
--   Additional **public** ports not listed in `EXPECTED_PORTS` trigger a
-    **WARN**.
-
-If a complete whitelist of all local ports is required, it must be
-implemented separately; that is intentionally not the health tool's
-scope.
+See [`health/README.md`](health/README.md) for configuration, cron
+setup, and status-level semantics.
 
 ### Mail administration
 
@@ -404,12 +295,16 @@ the full record list and backend contract.
 
 ## Documentation
 
-Health-check usage is documented in this README and in the scripts
-themselves.
+Each toolset has its own README with detailed status, configuration,
+and usage:
 
-The mail administration toolset has separate documentation because its
-configuration, validation, deployment, and rollback model is
-substantially larger:
+-   [`health/README.md`](health/README.md)
+-   [`cert/README.md`](cert/README.md)
+-   [`dns/README.md`](dns/README.md)
+
+The mail administration toolset additionally has separate docs
+because its configuration, validation, deployment, and rollback model
+is substantially larger:
 
 -   [`mail/README.md`](mail/README.md)
 -   [`mail/docs/architecture.md`](mail/docs/architecture.md)
@@ -417,25 +312,12 @@ substantially larger:
 -   [`mail/docs/installation.md`](mail/docs/installation.md)
 -   [`mail/docs/operations.md`](mail/docs/operations.md)
 
-The certificate request tool's usage, architecture, and backend
-contract are documented in [`cert/README.md`](cert/README.md).
-
 ## Development and Testing
 
 There is no build system or framework.
 
-Health scripts depend only on the relevant platform tools (`rcctl`,
-`syspatch`, `netstat` on OpenBSD; `systemctl`, `ss`, `apt` on Debian).
-
-To test health checks manually:
-
-``` sh
-doas sh health/openbsd-health.sh
-```
-
-``` sh
-sudo bash health/debian-health.sh
-```
+Health checks: see [`health/README.md`](health/README.md) for
+platform dependencies and manual test invocation.
 
 The mail toolset has been tested end-to-end on Debian 13 with Dovecot
 2.4.x and OpenSMTPD 7.6 portable. Its validation and deployment tools
