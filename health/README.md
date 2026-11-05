@@ -98,12 +98,35 @@ systemctl list-units --type=service --state=running --no-legend
 
 Then build `EXPECTED_SERVICES` from that output.
 
+### Certificate semantics
+
+The certificate check needs no host-specific list. By default it
+reads every `/etc/ssl/local/*/cert.pem` - the location `cert-deploy`
+installs to - so a certificate added later is covered automatically.
+Reporting uses the directory name.
+
+It warns when a certificate expires within `CERT_WARN_DAYS` (default
+14), reports an error within `CERT_ERROR_DAYS` (default 7), and
+reports an error for an expired or unreadable certificate. The check
+reads the deployed file, so it also shows when renewal has silently
+stopped working.
+
+Certificates kept elsewhere are added in `health.conf` (this is the
+one check setting meant to be host-local):
+
+```text
+CERT_GLOBS="/etc/ssl/local/*/cert.pem /etc/myapp/tls/*/cert.pem"
+```
+
 ### Status levels
 
 - **ERROR** - act immediately: a service is not running, an expected
-  port is not listening, or disk usage is above `DISK_ERROR_PCT`.
+  port is not listening, disk usage is above `DISK_ERROR_PCT`, or a
+  certificate is expired, unreadable, or expires within
+  `CERT_ERROR_DAYS`.
 - **WARN** - check soon: an unexpected service or port is running,
-  disk usage is above `DISK_WARN_PCT`, or patches/updates are pending.
+  disk usage is above `DISK_WARN_PCT`, a certificate expires within
+  `CERT_WARN_DAYS`, or patches/updates are pending.
 - **OK** - nothing to do.
 
 The mail subject reflects the highest level found (`[ERROR]`, `[WARN]`,

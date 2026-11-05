@@ -48,6 +48,15 @@ CHECK_SERVICES=yes
 CHECK_PORTS=yes
 CHECK_UPDATES=yes
 
+CHECK_CERTS=yes
+CERT_WARN_DAYS=14
+CERT_ERROR_DAYS=7
+# Certificates to watch: space-separated glob patterns. The default
+# covers everything cert-deploy installs. A host that keeps additional
+# certificates elsewhere can extend it in health.conf, for example:
+#   CERT_GLOBS="/etc/ssl/local/*/cert.pem /etc/myapp/tls/*/cert.pem"
+CERT_GLOBS="${CERT_GLOBS:-/etc/ssl/local/*/cert.pem}"
+
 # --- End configuration ---
 
 # cron uses a minimal PATH (e.g. /usr/bin:/bin) that does not include
@@ -74,6 +83,8 @@ STATUS=$LEVEL_OK
 DISK_LINES=""
 SERVICE_LINES=""
 PORT_LINES=""
+CERT_LINES=""
+CERT_COUNT=0
 UPDATE_LINES=""
 
 # --- Disk ---
@@ -156,6 +167,35 @@ if [[ "$CHECK_PORTS" == "yes" ]]; then
 	done
 fi
 
+# --- Certificates ---
+# -checkend is used instead of date arithmetic: it behaves the same
+# with every openssl/LibreSSL and needs no GNU date.
+if [[ "$CHECK_CERTS" == "yes" ]]; then
+	# CERT_GLOBS is deliberately unquoted so the patterns expand.
+	for cert in $CERT_GLOBS; do
+		[[ -f "$cert" ]] || continue
+		CERT_COUNT=$((CERT_COUNT + 1))
+		name=$(basename "$(dirname "$cert")")
+		if ! openssl x509 -in "$cert" -noout >/dev/null 2>&1; then
+			CERT_LINES="$CERT_LINES
+[ERROR] $name: certificate unreadable"
+			STATUS=$LEVEL_ERROR
+		elif ! openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1; then
+			CERT_LINES="$CERT_LINES
+[ERROR] $name: certificate EXPIRED"
+			STATUS=$LEVEL_ERROR
+		elif ! openssl x509 -in "$cert" -noout -checkend $((CERT_ERROR_DAYS * 86400)) >/dev/null 2>&1; then
+			CERT_LINES="$CERT_LINES
+[ERROR] $name: expires within $CERT_ERROR_DAYS days"
+			STATUS=$LEVEL_ERROR
+		elif ! openssl x509 -in "$cert" -noout -checkend $((CERT_WARN_DAYS * 86400)) >/dev/null 2>&1; then
+			CERT_LINES="$CERT_LINES
+[WARN] $name: expires within $CERT_WARN_DAYS days"
+			[[ "$STATUS" -lt "$LEVEL_WARN" ]] && STATUS=$LEVEL_WARN
+		fi
+	done
+fi
+
 # --- Updates ---
 if [[ "$CHECK_UPDATES" == "yes" ]]; then
 	UPDATES=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
@@ -198,6 +238,16 @@ REPORT=$(
 		echo "Public:   $(tr '\n' ' ' <<< "$PUBLIC_LISTENING")"
 		echo "Local:    $(tr '\n' ' ' <<< "$LOCAL_LISTENING")"
 		[[ -n "$PORT_LINES" ]] && echo "$PORT_LINES" || echo "[OK] matches expected ports"
+		echo ""
+	fi
+	if [[ "$CHECK_CERTS" == "yes" ]]; then
+		echo "=== Certificates ==="
+		if [[ "$CERT_COUNT" -eq 0 ]]; then
+			echo "[INFO] no certificates found ($CERT_GLOBS)"
+		else
+			echo "Checked: $CERT_COUNT"
+			[[ -n "$CERT_LINES" ]] && echo "$CERT_LINES" || echo "[OK] all certificates valid for more than $CERT_WARN_DAYS days"
+		fi
 		echo ""
 	fi
 	if [[ "$CHECK_UPDATES" == "yes" ]]; then
